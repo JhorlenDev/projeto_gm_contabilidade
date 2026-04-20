@@ -1,0 +1,140 @@
+<section class="panel-view clients-panel" data-panel-view-section="clientes">
+  <section class="clients-header">
+    <div class="clients-copy">
+      <h2>Painel de clientes</h2>
+      <p>Organize e veja seus clientes!</p>
+    </div>
+    <button class="clients-add-button" type="button" data-client-modal-open>
+      + Novo cliente
+    </button>
+  </section>
+
+  <section class="content-grid clients-layout">
+    <article class="card clients-card">
+      <div class="clients-toolbar">
+        <div class="search-row clients-search-row">
+          <input
+            type="search"
+            placeholder="Pesquisar cliente"
+            aria-label="Pesquisar cliente"
+            data-client-search
+          />
+        </div>
+        <div class="clients-count" data-client-count>0 clientes</div>
+      </div>
+
+      <div class="client-list" data-client-list></div>
+
+      <div class="empty-state" data-client-empty hidden>
+        Nenhum cliente encontrado para essa pesquisa.
+      </div>
+    </article>
+
+    <article class="card clients-summary">
+      <h2>Visão geral</h2>
+      <div class="stats clients-summary-grid">
+        <div class="stat stat-total">
+          <div class="stat-content">
+            <strong data-client-summary-total>0</strong>
+            <span class="stat-label">Cadastrados</span>
+          </div>
+          <div class="stat-icon-wrap">
+            <svg class="stat-icon" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="8" r="4" stroke="currentColor" stroke-width="2" fill="none"/>
+              <path d="M4 20c0-4 4-6 8-6s8 2 8 6" stroke="currentColor" stroke-width="2" fill="none"/>
+            </svg>
+          </div>
+        </div>
+        <div class="stat stat-active">
+          <div class="stat-content">
+            <strong data-client-summary-active>0</strong>
+            <span class="stat-label">Ativos</span>
+          </div>
+          <div class="stat-icon-wrap">
+            <svg class="stat-icon" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+            </svg>
+          </div>
+        </div>
+        <div class="stat stat-review">
+          <div class="stat-content">
+            <strong data-client-summary-review>0</strong>
+            <span class="stat-label">Em análise</span>
+          </div>
+          <div class="stat-icon-wrap">
+            <svg class="stat-icon" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2" fill="none"/>
+              <path d="M12 7v5l3 3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+          </div>
+        </div>
+        <div class="stat stat-paused">
+          <div class="stat-content">
+            <strong data-client-summary-paused>0</strong>
+            <span class="stat-label">Pausados</span>
+          </div>
+          <div class="stat-icon-wrap">
+            <svg class="stat-icon" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="6" y="4" width="12" height="16" rx="2" stroke="currentColor" stroke-width="2" fill="none"/>
+            </svg>
+          </div>
+        </div>
+      </div>
+    </article>
+  </section>
+
+  <dialog class="client-modal" data-client-modal>
+    <form class="client-modal-card" data-client-form>
+      <div class="client-modal-head">
+        <div>
+          <span>Cadastro rápido</span>
+          <h2 data-client-modal-title>Novo cliente</h2>
+        </div>
+        <button class="client-icon-button" type="button" data-client-modal-close aria-label="Fechar modal">
+          ×
+        </button>
+      </div>
+
+      <div class="client-form-grid">
+        <label>
+          <span>Código</span>
+          <input type="text" name="codigo" placeholder="Gerado automaticamente" autocomplete="off" readonly />
+        </label>
+        <label>
+          <span>Nome / Razão social</span>
+          <input type="text" name="nome" placeholder="Ex.: Alfa Contabilidade Ltda" autocomplete="off" required />
+        </label>
+        <label>
+          <span>CPF/CNPJ</span>
+          <input type="text" name="cpf_cnpj" placeholder="00.000.000/0001-00" autocomplete="off" required />
+        </label>
+        <label>
+          <span>IE</span>
+          <input type="text" name="ie" placeholder="Inscrição estadual" autocomplete="off" />
+        </label>
+        <label>
+          <span>Telefone</span>
+          <input type="text" name="telefone" placeholder="(11) 99999-9999" autocomplete="off" />
+        </label>
+        <label>
+          <span>Data de início</span>
+          <input type="date" name="data_inicio" required />
+        </label>
+        <label class="client-form-full">
+          <span>Situação</span>
+          <select name="situacao" required>
+            <option value="ATIVO">Ativo</option>
+            <option value="EM_ANALISE">Em análise</option>
+            <option value="PAUSADO">Pausado</option>
+            <option value="INATIVO">Inativo</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="modal-actions">
+        <button class="secondary" type="button" data-client-modal-close>Cancelar</button>
+        <button class="primary" type="submit" data-client-submit>Salvar cliente</button>
+      </div>
+    </form>
+  </dialog>
+</section>

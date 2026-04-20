@@ -1,0 +1,26 @@
+<section class="panel-view" data-panel-view-section="conciliador">
+  <section class="conciliador-header">
+    <h2>Conciliação Bancária</h2>
+    <p>Gerencie suas conciliações bancárias.</p>
+  </section>
+  <section class="conciliador-toolbar">
+    <select name="escritorio" data-conciliador-escritorio>
+      <option value="">Selecione o escritório...</option>
+    </select>
+    <select name="cliente" data-conciliador-cliente disabled>
+      <option value="">Selecione o cliente...</option>
+    </select>
+    <input type="month" name="periodo_inicio" data-conciliador-periodo-inicio disabled />
+    <input type="month" name="periodo_fim" data-conciliador-periodo-fim disabled />
+    <button type="button" class="primary" data-conciliador-filtrar>Filtrar</button>
+  </section>
+  <section class="content-grid">
+    <article class="card">
+      <div class="conciliador-list" data-conciliador-list>
+        <div class="empty-state" data-conciliador-empty>
+          Nenhuma conciliação encontrada.
+        </div>
+      </div>
+    </article>
+  </section>
+</section>
