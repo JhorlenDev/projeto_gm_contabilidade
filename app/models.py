@@ -198,6 +198,32 @@ class TransacaoImportada(models.Model):
         return f"{self.data_movimento} - {self.descricao_original[:40]}"
 
 
+class PerfilConciliacao(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    escritorio = models.ForeignKey(Escritorio, on_delete=models.PROTECT, related_name="perfis_conciliacao")
+    empresa = models.ForeignKey(Cliente, on_delete=models.PROTECT, related_name="perfis_conciliacao")
+    nome = models.CharField(max_length=255)
+    descricao = models.TextField(blank=True, default="")
+    conta_bancaria = models.CharField(max_length=120, blank=True, default="")
+    codigo_historico = models.CharField(max_length=120, blank=True, default="")
+    codigo_empresa = models.CharField(max_length=120, blank=True, default="")
+    cnpj = models.CharField(max_length=20, blank=True, default="")
+    parametros = models.JSONField(default=list, blank=True)
+    ativo = models.BooleanField(default=True, db_index=True)
+    criado_em = models.DateTimeField(auto_now_add=True)
+    atualizado_em = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["nome"]
+        indexes = [
+            models.Index(fields=["escritorio", "ativo"]),
+            models.Index(fields=["empresa", "ativo"]),
+        ]
+
+    def __str__(self):
+        return self.nome
+
+
 class KeycloakUser(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     sub = models.CharField(max_length=255, unique=True, db_index=True)

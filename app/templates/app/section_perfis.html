@@ -1,0 +1,160 @@
+<section class="panel-view" data-panel-view-section="perfis">
+  <section class="conciliador-header">
+    <h2>Perfis de Conciliação</h2>
+    <p>Configure perfis de importação reutilizáveis para cada cliente.</p>
+  </section>
+
+  <section class="perfis-toolbar">
+    <div class="perfis-toolbar-left">
+      <button class="primary" type="button" data-perfis-novo>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        Novo Perfil
+      </button>
+      <button class="secondary" type="button" data-perfis-duplicar disabled>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <rect x="8" y="8" width="12" height="12" rx="2" stroke="currentColor" stroke-width="1.8"/>
+          <path d="M4 16V6a2 2 0 0 1 2-2h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+        </svg>
+        Duplicar Perfil
+      </button>
+    </div>
+  </section>
+
+  <section class="content-grid content-grid--single">
+    <article class="card">
+      <div class="perfis-manage-section">
+        <div class="perfis-manage-header">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M4 6h16M4 12h10M4 18h7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+          </svg>
+          <strong>Gerenciar Parâmetros de Perfil</strong>
+        </div>
+        <p class="perfis-manage-sub">Selecione um perfil para gerenciar:</p>
+        <input
+          class="perfis-search"
+          type="search"
+          placeholder="Pesquisar perfil por nome..."
+          data-perfis-manage-search
+          autocomplete="off"
+        />
+      </div>
+
+      <div class="perfis-section-divider">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        <strong>Todos os Perfis Criados</strong>
+      </div>
+
+      <div class="perfis-filter-row">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <circle cx="11" cy="11" r="8" stroke="currentColor" stroke-width="1.8"/>
+          <path d="m21 21-4.35-4.35" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+        </svg>
+        <strong>Filtrar Perfis</strong>
+      </div>
+      <input
+        class="perfis-search"
+        type="search"
+        placeholder="Digite o nome do perfil para filtrar..."
+        data-perfis-filter-search
+        autocomplete="off"
+      />
+
+      <div class="perfis-table-wrap">
+        <table class="perfis-table">
+          <thead>
+            <tr>
+              <th>NOME DO PERFIL</th>
+              <th>CONTA BANCÁRIA</th>
+              <th>CÓD. HISTÓRICO</th>
+              <th>CÓD. EMPRESA</th>
+              <th>PARÂMETROS</th>
+              <th>AÇÕES</th>
+            </tr>
+          </thead>
+          <tbody data-perfis-tbody>
+            <tr data-perfis-empty>
+              <td colspan="6" class="empty-state">Nenhum perfil cadastrado.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </article>
+  </section>
+
+  <!-- Modal: Novo / Editar Perfil -->
+  <dialog class="perfis-modal" data-perfis-modal aria-modal="true" aria-labelledby="perfisModalTitle">
+    <div class="perfis-modal-inner">
+      <div class="perfis-modal-head">
+        <div>
+          <h3 id="perfisModalTitle" data-perfis-modal-title>Novo Perfil</h3>
+          <p data-perfis-modal-sub>Preencha os dados para criar um novo perfil de configuração.</p>
+        </div>
+        <button class="perfis-modal-close" type="button" data-perfis-modal-close aria-label="Fechar">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>
+      <form class="perfis-form" data-perfis-form novalidate>
+        <input type="hidden" name="id" />
+        <div class="perfis-form-grid">
+          <label>
+            <span>Escritório <span class="required">*</span></span>
+            <div class="conciliador-control">
+              <select name="escritorio" required data-perfis-select-escritorio>
+                <option value="">Selecione o escritório...</option>
+              </select>
+              <span class="conciliador-control-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+              </span>
+            </div>
+          </label>
+          <label>
+            <span>Empresa (Cliente) <span class="required">*</span></span>
+            <div class="conciliador-control">
+              <select name="empresa" required data-perfis-select-empresa>
+                <option value="">Selecione a empresa...</option>
+              </select>
+              <span class="conciliador-control-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+              </span>
+            </div>
+          </label>
+          <label>
+            <span>Nome do Perfil <span class="required">*</span></span>
+            <input type="text" name="nome" placeholder="Ex: REAL COMERCIO - BRADESCO" required autocomplete="off" />
+          </label>
+          <label>
+            <span>Descrição</span>
+            <input type="text" name="descricao" placeholder="Descrição opcional" autocomplete="off" />
+          </label>
+          <label>
+            <span>Conta Bancária</span>
+            <input type="text" name="conta_bancaria" placeholder="1.1.01.001" autocomplete="off" />
+          </label>
+          <label>
+            <span>Cód. Histórico</span>
+            <input type="text" name="codigo_historico" placeholder="001" autocomplete="off" />
+          </label>
+          <label>
+            <span>Cód. Empresa</span>
+            <input type="text" name="codigo_empresa" placeholder="001" autocomplete="off" />
+          </label>
+          <label>
+            <span>CNPJ</span>
+            <input type="text" name="cnpj" placeholder="00.000.000/0001-00" autocomplete="off" />
+          </label>
+        </div>
+        <p data-perfis-form-error class="perfis-form-error" hidden></p>
+        <div class="perfis-form-actions">
+          <button class="secondary" type="button" data-perfis-modal-close>Cancelar</button>
+          <button class="primary" type="submit" data-perfis-submit>+ Criar Perfil</button>
+        </div>
+      </form>
+    </div>
+  </dialog>
+</section>

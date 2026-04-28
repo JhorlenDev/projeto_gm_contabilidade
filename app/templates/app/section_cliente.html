@@ -136,5 +136,16 @@
         <button class="primary" type="submit" data-client-submit>Salvar cliente</button>
       </div>
     </form>
+
+    <!-- Histórico de regras (visível apenas no modo "ver") -->
+    <div class="client-historico-section" data-client-historico-section hidden>
+      <div class="client-historico-header">
+        <h3>Regras de Conciliação</h3>
+        <span class="client-historico-count" data-client-historico-count></span>
+      </div>
+      <div class="client-historico-loading" data-client-historico-loading hidden>Carregando...</div>
+      <div class="client-historico-empty" data-client-historico-empty hidden>Nenhuma regra cadastrada para este cliente.</div>
+      <ul class="client-historico-list" data-client-historico-list></ul>
+    </div>
   </dialog>
 </section>

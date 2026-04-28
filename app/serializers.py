@@ -6,7 +6,7 @@ from pathlib import Path
 from django.utils import timezone
 from rest_framework import serializers
 
-from .models import Cliente, Escritorio, ImportacaoExtrato, RegraConciliador, TransacaoImportada, TipoArquivo, TipoComparacao, TipoMovimento
+from .models import Cliente, Escritorio, ImportacaoExtrato, PerfilConciliacao, RegraConciliador, TransacaoImportada, TipoArquivo, TipoComparacao, TipoMovimento
 
 
 def _normalize_situacao(value: str) -> str:
@@ -383,3 +383,65 @@ class TransacaoImportadaSerializer(serializers.ModelSerializer):
         if obj.revisado_manual:
             return "MANUAL"
         return "APLICADO" if obj.regra_aplicada_id else "PENDENTE"
+
+
+class PerfilConciliacaoSerializer(serializers.ModelSerializer):
+    escritorio_nome = serializers.CharField(source="escritorio.nome", read_only=True)
+    empresa_nome = serializers.CharField(source="empresa.nome", read_only=True)
+    parametros_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = PerfilConciliacao
+        fields = [
+            "id",
+            "escritorio",
+            "escritorio_nome",
+            "empresa",
+            "empresa_nome",
+            "nome",
+            "descricao",
+            "conta_bancaria",
+            "codigo_historico",
+            "codigo_empresa",
+            "cnpj",
+            "parametros",
+            "parametros_count",
+            "ativo",
+            "criado_em",
+            "atualizado_em",
+        ]
+        read_only_fields = ["id", "escritorio_nome", "empresa_nome", "parametros_count", "criado_em", "atualizado_em"]
+        extra_kwargs = {
+            "descricao": {"required": False, "allow_blank": True},
+            "conta_bancaria": {"required": False, "allow_blank": True},
+            "codigo_historico": {"required": False, "allow_blank": True},
+            "codigo_empresa": {"required": False, "allow_blank": True},
+            "cnpj": {"required": False, "allow_blank": True},
+            "parametros": {"required": False},
+        }
+
+    def validate_nome(self, value):
+        return _strip_text(value)
+
+    def validate_descricao(self, value):
+        return _strip_text(value)
+
+    def validate_conta_bancaria(self, value):
+        return _strip_text(value)
+
+    def validate_codigo_historico(self, value):
+        return _strip_text(value)
+
+    def validate_codigo_empresa(self, value):
+        return _strip_text(value)
+
+    def validate_cnpj(self, value):
+        return _strip_text(value)
+
+    def validate_parametros(self, value):
+        return value if isinstance(value, list) else []
+
+    def get_parametros_count(self, obj):
+        params = obj.parametros or []
+        return len(params) if isinstance(params, list) else 0
+

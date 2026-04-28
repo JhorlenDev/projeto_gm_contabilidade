@@ -375,7 +375,7 @@
   }
 
   function normalizePanelView(view) {
-    if (view === "clientes" || view === "conciliador") {
+    if (view === "clientes" || view === "conciliador" || view === "perfis") {
       return view;
     }
     return "dashboard";
@@ -2190,6 +2190,11 @@
     const summaryActive = panel.querySelector("[data-client-summary-active]");
     const summaryReview = panel.querySelector("[data-client-summary-review]");
     const summaryPaused = panel.querySelector("[data-client-summary-paused]");
+    const historicoSection = panel.querySelector("[data-client-historico-section]");
+    const historicoLoading = panel.querySelector("[data-client-historico-loading]");
+    const historicoEmpty = panel.querySelector("[data-client-historico-empty]");
+    const historicoList = panel.querySelector("[data-client-historico-list]");
+    const historicoCount = panel.querySelector("[data-client-historico-count]");
 
     if (!modal || !form || !list) {
       return;
@@ -2237,6 +2242,8 @@ function setClientFormMode(mode) {
         form.elements.situacao.value = "ATIVO";
       }
       setClientFormMode("create");
+      if (historicoSection) historicoSection.hidden = true;
+      if (historicoList) historicoList.innerHTML = "";
     }
 
     function openModal(record = null, mode = "create") {
@@ -2266,6 +2273,16 @@ function setClientFormMode(mode) {
 
       setClientFormMode(mode);
 
+      // Mostra/oculta seção de histórico
+      if (historicoSection) {
+        if (mode === "view" && record?.id) {
+          historicoSection.hidden = false;
+          loadClientHistorico(record.id);
+        } else {
+          historicoSection.hidden = true;
+        }
+      }
+
       if (typeof modal.showModal === "function") {
         if (!modal.open) {
           modal.showModal();
@@ -2280,6 +2297,55 @@ function setClientFormMode(mode) {
           firstField.focus();
         }
       });
+    }
+
+    async function loadClientHistorico(clientId) {
+      if (!historicoList || !historicoLoading || !historicoEmpty) return;
+      historicoLoading.hidden = false;
+      historicoEmpty.hidden = true;
+      historicoList.innerHTML = "";
+      if (historicoCount) historicoCount.textContent = "";
+
+      try {
+        const data = await apiRequest(session, `/conciliador-regras/?empresa=${clientId}&ativo=true`);
+        const regras = Array.isArray(data) ? data : (data?.results || []);
+
+        historicoLoading.hidden = true;
+
+        if (!regras.length) {
+          historicoEmpty.hidden = false;
+          return;
+        }
+
+        if (historicoCount) historicoCount.textContent = `${regras.length} regra${regras.length > 1 ? "s" : ""}`;
+
+        // Ordena por data de criação mais recente
+        regras.sort((a, b) => new Date(b.criado_em) - new Date(a.criado_em));
+
+        historicoList.innerHTML = regras.map((r) => {
+          const dt = r.criado_em ? new Date(r.criado_em).toLocaleDateString("pt-BR") : "—";
+          const atualizado = r.atualizado_em && r.atualizado_em !== r.criado_em
+            ? ` · atualizado ${new Date(r.atualizado_em).toLocaleDateString("pt-BR")}` : "";
+          const debito = r.conta_debito ? `D: ${escapeHtml(r.conta_debito)}` : "";
+          const credito = r.conta_credito ? `C: ${escapeHtml(r.conta_credito)}` : "";
+          const hist = r.codigo_historico ? `H: ${escapeHtml(r.codigo_historico)}` : "";
+          const codigos = [debito, credito, hist].filter(Boolean).join(" · ");
+          return `
+            <li class="client-historico-item">
+              <div class="client-historico-item-head">
+                <span class="client-historico-item-nome">${escapeHtml(r.nome || r.texto_referencia || "—")}</span>
+                <span class="client-historico-item-data">${dt}${atualizado}</span>
+              </div>
+              ${codigos ? `<div class="client-historico-item-codigos">${codigos}</div>` : ""}
+            </li>
+          `;
+        }).join("");
+      } catch (err) {
+        historicoLoading.hidden = true;
+        historicoEmpty.hidden = false;
+        historicoEmpty.textContent = "Falha ao carregar regras.";
+        logWarn("Falha ao carregar histórico do cliente.", err);
+      }
     }
 
     function closeModal() {
@@ -2463,6 +2529,1030 @@ function setClientFormMode(mode) {
 
     reloadClients();
   }
+
+  // ── Perfis de Conciliação ──────────────────────────────────────────────────
+
+  function setupPerfisCrud(session) {
+    const panel = document.querySelector('[data-panel-view-section="perfis"]');
+    if (!panel) {
+      return;
+    }
+
+    const modal = panel.querySelector("[data-perfis-modal]");
+    const form = panel.querySelector("[data-perfis-form]");
+    const modalTitle = panel.querySelector("[data-perfis-modal-title]");
+    const modalSub = panel.querySelector("[data-perfis-modal-sub]");
+    const submitButton = panel.querySelector("[data-perfis-submit]");
+    const formError = panel.querySelector("[data-perfis-form-error]");
+    const tbody = panel.querySelector("[data-perfis-tbody]");
+    const emptyRow = panel.querySelector("[data-perfis-empty]");
+    const novoButton = panel.querySelector("[data-perfis-novo]");
+    const duplicarButton = panel.querySelector("[data-perfis-duplicar]");
+    const manageSearch = panel.querySelector("[data-perfis-manage-search]");
+    const filterSearch = panel.querySelector("[data-perfis-filter-search]");
+    const closeButtons = Array.from(panel.querySelectorAll("[data-perfis-modal-close]"));
+    const selectEscritorio = panel.querySelector("[data-perfis-select-escritorio]");
+    const selectEmpresa = panel.querySelector("[data-perfis-select-empresa]");
+
+    const state = {
+      perfis: [],
+      activeId: null,
+      loading: false,
+    };
+
+    // ── Carrega escritórios e empresas para os selects ────────────────────
+    async function loadSelects() {
+      try {
+        const [escritorios, empresas] = await Promise.all([
+          apiRequest(session, "/escritorios/"),
+          apiRequest(session, "/clientes/"),
+        ]);
+
+        const escs = Array.isArray(escritorios) ? escritorios : (escritorios?.results || []);
+        const emps = Array.isArray(empresas) ? empresas : (empresas?.results || []);
+
+        if (selectEscritorio) {
+          const cur = selectEscritorio.value;
+          selectEscritorio.innerHTML = '<option value="">Selecione o escritório...</option>' +
+            escs.map((e) => `<option value="${escapeHtml(e.id)}">${escapeHtml(e.nome)}</option>`).join("");
+          if (cur) selectEscritorio.value = cur;
+          // auto-seleciona se houver apenas 1
+          if (escs.length === 1 && !selectEscritorio.value) selectEscritorio.value = escs[0].id;
+        }
+
+        if (selectEmpresa) {
+          const cur = selectEmpresa.value;
+          selectEmpresa.innerHTML = '<option value="">Selecione a empresa...</option>' +
+            emps.map((e) => `<option value="${escapeHtml(e.id)}">${escapeHtml(e.nome)} ${e.cpf_cnpj ? `(${escapeHtml(e.cpf_cnpj)})` : ""}</option>`).join("");
+          if (cur) selectEmpresa.value = cur;
+        }
+      } catch (err) {
+        logWarn("Falha ao carregar selects de escritório/empresa para perfis.", err);
+      }
+    }
+
+    function showFormError(message) {
+      if (formError) {
+        formError.textContent = message;
+        formError.hidden = !message;
+      }
+    }
+
+    function openModal(perfil = null) {
+      const isNew = !perfil || !perfil.id;
+      state.activeId = perfil?.id || null;
+      form.reset();
+      showFormError("");
+
+      // Garante que os selects estão populados antes de abrir
+      loadSelects().then(() => {
+        if (perfil) {
+          form.elements.id.value = perfil.id || "";
+          form.elements.nome.value = perfil.nome || "";
+          form.elements.descricao.value = perfil.descricao || "";
+          form.elements.conta_bancaria.value = perfil.conta_bancaria || "";
+          form.elements.codigo_historico.value = perfil.codigo_historico || "";
+          form.elements.codigo_empresa.value = perfil.codigo_empresa || "";
+          form.elements.cnpj.value = perfil.cnpj || "";
+          if (selectEscritorio && perfil.escritorio) selectEscritorio.value = perfil.escritorio;
+          if (selectEmpresa && perfil.empresa) selectEmpresa.value = perfil.empresa;
+        }
+      });
+
+      if (isNew) {
+        form.elements.id.value = "";
+        if (modalTitle) modalTitle.textContent = "Novo Perfil";
+        if (modalSub) modalSub.textContent = "Preencha os dados para criar um novo perfil de configuração.";
+        if (submitButton) submitButton.textContent = "+ Criar Perfil";
+      } else {
+        if (modalTitle) modalTitle.textContent = "Editar Perfil";
+        if (modalSub) modalSub.textContent = "Altere os dados do perfil de configuração.";
+        if (submitButton) submitButton.textContent = "Salvar Alterações";
+      }
+
+      if (typeof modal.showModal === "function" && !modal.open) {
+        modal.showModal();
+      } else {
+        modal.setAttribute("open", "open");
+      }
+
+      window.requestAnimationFrame(() => {
+        const nomeField = form.elements.nome;
+        if (nomeField && typeof nomeField.focus === "function") nomeField.focus();
+      });
+    }
+
+    function closeModal() {
+      if (typeof modal.close === "function" && modal.open) {
+        modal.close();
+      } else {
+        modal.removeAttribute("open");
+      }
+      state.activeId = null;
+      form.reset();
+      showFormError("");
+    }
+
+    function getSelectedRow() {
+      return tbody.querySelector("tr[data-perfil-id].is-selected");
+    }
+
+    function getFormData() {
+      return {
+        escritorio: String(form.elements.escritorio?.value || "").trim(),
+        empresa: String(form.elements.empresa?.value || "").trim(),
+        nome: String(form.elements.nome?.value || "").trim(),
+        descricao: String(form.elements.descricao?.value || "").trim(),
+        conta_bancaria: String(form.elements.conta_bancaria?.value || "").trim(),
+        codigo_historico: String(form.elements.codigo_historico?.value || "").trim(),
+        codigo_empresa: String(form.elements.codigo_empresa?.value || "").trim(),
+        cnpj: String(form.elements.cnpj?.value || "").trim(),
+      };
+    }
+
+    function renderRows(filterQuery = "") {
+      const query = normalizeSearchTerm(filterQuery);
+      const rows = Array.from(tbody.querySelectorAll("tr[data-perfil-id]"));
+
+      rows.forEach((row) => {
+        const searchable = normalizeSearchTerm(row.dataset.perfilSearch || "");
+        row.hidden = Boolean(query && !searchable.includes(query));
+      });
+
+      const visibleRows = rows.filter((row) => !row.hidden);
+      if (emptyRow) {
+        emptyRow.hidden = visibleRows.length > 0 || rows.length > 0;
+      }
+    }
+
+    function buildRow(perfil) {
+      const tr = document.createElement("tr");
+      tr.dataset.perfilId = perfil.id;
+      tr.dataset.perfilNome = perfil.nome || "";
+      tr.dataset.perfilSearch = normalizeSearchTerm([
+        perfil.nome,
+        perfil.conta_bancaria,
+        perfil.codigo_historico,
+        perfil.codigo_empresa,
+        perfil.cnpj,
+      ].join(" "));
+
+      const paramCount = typeof perfil.parametros_count === "number" ? perfil.parametros_count : (perfil.parametros?.length || 0);
+
+      tr.innerHTML = `
+        <td><strong>${escapeHtml(perfil.nome || "")}</strong></td>
+        <td><span class="perfis-code">${escapeHtml(perfil.conta_bancaria || "–")}</span></td>
+        <td>${escapeHtml(perfil.codigo_historico || "–")}</td>
+        <td>${escapeHtml(perfil.codigo_empresa || "–")}</td>
+        <td>
+          ${paramCount > 0
+            ? `<button class="perfis-param-badge" type="button" data-perfil-params>${paramCount}</button>`
+            : `<span class="perfis-code" style="opacity:0.45">0</span>`
+          }
+        </td>
+        <td>
+          <div class="perfis-actions-row">
+            <button class="client-action client-action-edit" type="button" data-perfil-edit aria-label="Editar perfil" title="Editar">${clientActionIcon("edit")}</button>
+            <button class="client-action client-action-delete" type="button" data-perfil-delete aria-label="Excluir perfil" title="Excluir">${clientActionIcon("delete")}</button>
+          </div>
+        </td>
+      `;
+
+      tr.addEventListener("click", (e) => {
+        if (e.target.closest("[data-perfil-edit]") || e.target.closest("[data-perfil-delete]")) return;
+        const wasSelected = tr.classList.contains("is-selected");
+        tbody.querySelectorAll("tr[data-perfil-id]").forEach((r) => r.classList.remove("is-selected"));
+        tr.classList.toggle("is-selected", !wasSelected);
+        if (duplicarButton) {
+          duplicarButton.disabled = !tr.classList.contains("is-selected");
+        }
+      });
+
+      return tr;
+    }
+
+    function loadPerfis() {
+      apiRequest(session, "/conciliador-perfis/")
+        .then((payload) => {
+          state.perfis = Array.isArray(payload) ? payload : (payload?.results || []);
+          // Clear existing rows
+          Array.from(tbody.querySelectorAll("tr[data-perfil-id]")).forEach((r) => r.remove());
+
+          state.perfis.forEach((perfil) => {
+            tbody.insertBefore(buildRow(perfil), emptyRow || null);
+          });
+
+          renderRows();
+        })
+        .catch((error) => {
+          logWarn("Falha ao carregar perfis de conciliação.", error);
+          renderRows();
+        });
+    }
+
+    // Carrega selects na inicialização
+    loadSelects();
+
+    async function savePerfil() {
+      const data = getFormData();
+      if (!data.escritorio) {
+        showFormError("Selecione o escritório.");
+        return;
+      }
+      if (!data.empresa) {
+        showFormError("Selecione a empresa (cliente).");
+        return;
+      }
+      if (!data.nome) {
+        showFormError("O nome do perfil é obrigatório.");
+        return;
+      }
+
+      if (submitButton) submitButton.disabled = true;
+      showFormError("");
+
+      try {
+        let saved;
+        if (state.activeId) {
+          saved = await apiRequest(session, `/conciliador-perfis/${state.activeId}/`, { method: "PATCH", body: data });
+          const existingRow = tbody.querySelector(`tr[data-perfil-id="${CSS.escape(state.activeId)}"]`);
+          if (existingRow) {
+            const updated = { ...state.perfis.find((p) => p.id === state.activeId), ...data, ...saved };
+            existingRow.replaceWith(buildRow(updated));
+            state.perfis = state.perfis.map((p) => (p.id === state.activeId ? updated : p));
+          }
+        } else {
+          saved = await apiRequest(session, "/conciliador-perfis/", { method: "POST", body: data });
+          state.perfis.push(saved);
+          tbody.insertBefore(buildRow(saved), emptyRow || null);
+        }
+
+        renderRows(filterSearch?.value || "");
+        closeModal();
+      } catch (error) {
+        showFormError(error?.message || "Falha ao salvar o perfil.");
+      } finally {
+        if (submitButton) submitButton.disabled = false;
+      }
+    }
+
+    async function deletePerfil(id, nome) {
+      if (!window.confirm(`Excluir o perfil "${nome}"?`)) return;
+      try {
+        await apiRequest(session, `/conciliador-perfis/${id}/`, { method: "DELETE" });
+        const row = tbody.querySelector(`tr[data-perfil-id="${CSS.escape(id)}"]`);
+        if (row) row.remove();
+        state.perfis = state.perfis.filter((p) => p.id !== id);
+        renderRows(filterSearch?.value || "");
+      } catch (error) {
+        window.alert("Falha ao excluir o perfil: " + (error?.message || "erro desconhecido"));
+      }
+    }
+
+    // Events
+    if (novoButton) {
+      novoButton.addEventListener("click", () => openModal());
+    }
+
+    // Listener: criar perfil a partir do extrato
+    document.addEventListener("extrato:criar-perfil", (e) => {
+      const { nome, cnpj } = e.detail || {};
+      setPanelView("perfis");
+      openModal({ id: null, nome: nome || "", cnpj: cnpj || "", descricao: "", conta_bancaria: "", codigo_historico: "", codigo_empresa: "" });
+    });
+
+    if (duplicarButton) {
+      duplicarButton.addEventListener("click", () => {
+        const row = getSelectedRow();
+        if (!row) return;
+        const perfil = state.perfis.find((p) => p.id === row.dataset.perfilId);
+        if (!perfil) return;
+        const copy = { ...perfil, id: null, nome: `${perfil.nome} (cópia)` };
+        openModal(copy);
+        // clear id so we create a new record
+        form.elements.id.value = "";
+        state.activeId = null;
+      });
+    }
+
+    closeButtons.forEach((btn) => btn.addEventListener("click", closeModal));
+
+    modal.addEventListener("close", () => {
+      state.activeId = null;
+      showFormError("");
+    });
+
+    modal.addEventListener("click", (event) => {
+      if (event.target === modal) closeModal();
+    });
+
+    if (filterSearch) {
+      filterSearch.addEventListener("input", () => renderRows(filterSearch.value));
+    }
+
+    if (manageSearch) {
+      manageSearch.addEventListener("input", () => renderRows(manageSearch.value));
+    }
+
+    tbody.addEventListener("click", (event) => {
+      const editBtn = event.target.closest("[data-perfil-edit]");
+      const deleteBtn = event.target.closest("[data-perfil-delete]");
+
+      if (editBtn) {
+        const row = editBtn.closest("tr[data-perfil-id]");
+        if (!row) return;
+        const perfil = state.perfis.find((p) => p.id === row.dataset.perfilId);
+        if (perfil) openModal(perfil);
+        return;
+      }
+
+      if (deleteBtn) {
+        const row = deleteBtn.closest("tr[data-perfil-id]");
+        if (!row) return;
+        deletePerfil(row.dataset.perfilId, row.dataset.perfilNome || "este perfil");
+      }
+    });
+
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      savePerfil().catch((error) => {
+        showFormError(error?.message || "Falha ao salvar o perfil.");
+      });
+    });
+
+    loadPerfis();
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+
+  function setupExtratoImport(session) {
+    const panel = document.querySelector('[data-panel-view-section="conciliador"]');
+    if (!panel) return;
+
+    const form = panel.querySelector("[data-extrato-form]");
+    const fileInput = panel.querySelector("[data-extrato-file-input]");
+    const fileLabel = panel.querySelector("[data-extrato-file-label]");
+    const dropzone = panel.querySelector("[data-extrato-dropzone]");
+    const submitBtn = panel.querySelector("[data-extrato-submit]");
+    const errorEl = panel.querySelector("[data-extrato-error]");
+    const resultCard = panel.querySelector("[data-extrato-result]");
+    const metaEl = panel.querySelector("[data-extrato-meta]");
+    const criarPerfilBtn = panel.querySelector("[data-extrato-criar-perfil]");
+    const tbody = panel.querySelector("[data-extrato-tbody]");
+    const searchInput = panel.querySelector("[data-extrato-search]");
+    const filterChips = Array.from(panel.querySelectorAll("[data-extrato-natureza-filter]"));
+    const totalsEl = panel.querySelector("[data-extrato-totals]");
+    const totalCreditoEl = panel.querySelector("[data-extrato-total-credito]");
+    const totalDebitoEl = panel.querySelector("[data-extrato-total-debito]");
+    const totalSaldoEl = panel.querySelector("[data-extrato-total-saldo]");
+    const countEls = {
+      TODOS: panel.querySelector("[data-extrato-count-todos]"),
+      CREDITO: panel.querySelector("[data-extrato-count-credito]"),
+      DEBITO: panel.querySelector("[data-extrato-count-debito]"),
+      INDEFINIDA: panel.querySelector("[data-extrato-count-indefinido]"),
+    };
+
+    if (!form || !fileInput || !tbody) return;
+
+    const state = {
+      lancamentos: [],
+      filtroNatureza: "TODOS",
+      busca: "",
+      extratoMeta: null,
+      componentes: {},   // keyed by lancamento linha_key
+      detalheKey: null,  // key do lançamento aberto no dialog
+      regras: {},        // keyed by lancamento key → { id?, codDebito, codCredito, codHistorico }
+      empresaId: null,   // empresa selecionada para este extrato
+      escritorioId: null, // escritório principal (carregado da API)
+      regrasMap: {},     // keyed por historicNormKey → { id, codDebito, codCredito, codHistorico }
+    };
+
+    // ── Dropzone drag & drop ──────────────────────────────────────────────
+    if (dropzone) {
+      dropzone.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        dropzone.classList.add("is-drag-over");
+      });
+      dropzone.addEventListener("dragleave", () => dropzone.classList.remove("is-drag-over"));
+      dropzone.addEventListener("drop", (e) => {
+        e.preventDefault();
+        dropzone.classList.remove("is-drag-over");
+        const file = e.dataTransfer?.files?.[0];
+        if (file) {
+          const dt = new DataTransfer();
+          dt.items.add(file);
+          fileInput.files = dt.files;
+          updateFileLabel(file);
+        }
+      });
+    }
+
+    fileInput.addEventListener("change", () => {
+      const file = fileInput.files?.[0];
+      if (file) updateFileLabel(file);
+    });
+
+    function updateFileLabel(file) {
+      if (fileLabel) fileLabel.textContent = file.name;
+      if (dropzone) dropzone.dataset.hasFile = "true";
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────
+    function setError(msg) {
+      if (!errorEl) return;
+      errorEl.textContent = msg;
+      errorEl.hidden = !msg;
+    }
+
+    function formatDateBR(iso) {
+      if (!iso) return "";
+      const [y, m, d] = iso.split("-");
+      return `${d}/${m}/${y}`;
+    }
+
+    function formatCurrency(valStr) {
+      const num = parseFloat(valStr || "0");
+      return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(isFinite(num) ? num : 0);
+    }
+
+    function naturezaBadge(nat) {
+      if (nat === "CREDITO") return '<span class="extrato-nat extrato-nat--credito">Crédito</span>';
+      if (nat === "DEBITO") return '<span class="extrato-nat extrato-nat--debito">Débito</span>';
+      return '<span class="extrato-nat extrato-nat--indefinido">Indefinido</span>';
+    }
+
+    function filteredRows() {
+      const query = normalizeSearchTerm(state.busca);
+      return state.lancamentos.filter((l) => {
+        const natMatch = state.filtroNatureza === "TODOS" || l.natureza === state.filtroNatureza;
+        const textMatch = !query || normalizeSearchTerm(l.historico + " " + l.documento).includes(query);
+        return natMatch && textMatch;
+      });
+    }
+
+    function renderTable() {
+      const rows = filteredRows();
+      if (!rows.length) {
+        tbody.innerHTML = '<tr data-extrato-empty><td colspan="5" class="empty-state">Nenhum lançamento encontrado para o filtro.</td></tr>';
+        if (totalsEl) totalsEl.hidden = true;
+        return;
+      }
+
+      tbody.innerHTML = rows.map((l) => {
+        const key = lancamentoKey(l);
+        const comps = state.componentes[key] || [];
+        const badge = comps.length > 0
+          ? `<span class="detalhe-badge">${comps.length}</span>`
+          : "";
+        return `
+        <tr data-extrato-row data-natureza="${escapeHtml(l.natureza)}" data-linha-key="${escapeHtml(key)}" class="extrato-row-clickable" title="Clique para detalhar">
+          <td class="extrato-td-date">${escapeHtml(formatDateBR(l.data))}</td>
+          <td class="extrato-td-hist">${escapeHtml(l.historico)}${badge}</td>
+          <td class="extrato-td-doc">${escapeHtml(l.documento || "—")}</td>
+          <td class="extrato-td-valor text-right">${escapeHtml(formatCurrency(l.valor))}</td>
+          <td>${naturezaBadge(l.natureza)}</td>
+        </tr>
+        `;
+      }).join("");
+
+      // Totais
+      const visibleAll = state.filtroNatureza === "TODOS" ? state.lancamentos : rows;
+      const totalC = state.lancamentos.filter((l) => l.natureza === "CREDITO").reduce((s, l) => s + parseFloat(l.valor || 0), 0);
+      const totalD = state.lancamentos.filter((l) => l.natureza === "DEBITO").reduce((s, l) => s + parseFloat(l.valor || 0), 0);
+      if (totalCreditoEl) totalCreditoEl.textContent = formatCurrency(totalC);
+      if (totalDebitoEl) totalDebitoEl.textContent = formatCurrency(totalD);
+      if (totalSaldoEl) totalSaldoEl.textContent = formatCurrency(totalC - totalD);
+      if (totalsEl) totalsEl.hidden = false;
+    }
+
+    function updateCounts() {
+      const counts = { TODOS: state.lancamentos.length, CREDITO: 0, DEBITO: 0, INDEFINIDA: 0 };
+      state.lancamentos.forEach((l) => {
+        if (counts[l.natureza] !== undefined) counts[l.natureza]++;
+        else counts.INDEFINIDA++;
+      });
+      Object.entries(countEls).forEach(([key, el]) => {
+        if (el) el.textContent = counts[key] ?? 0;
+      });
+    }
+
+    function setActiveChip(value) {
+      state.filtroNatureza = value;
+      filterChips.forEach((chip) => {
+        chip.classList.toggle("is-active", chip.dataset.extratoNaturezaFilter === value);
+      });
+      renderTable();
+    }
+
+    // ── Chave única por lançamento ─────────────────────────────────────────
+    function lancamentoKey(l) {
+      return `${l.linha || l.linha_origem || 0}_${l.data}_${l.valor}`;
+    }
+
+    // ── Normalização de histórico ──────────────────────────────────────────
+    function historicNormKey(historico) {
+      return String(historico || "").trim().toLowerCase();
+    }
+
+    // ── Regras — integração com API ───────────────────────────────────────
+    async function loadRegrasFromAPI() {
+      if (!state.empresaId) return;
+      try {
+        const data = await apiRequest(session, `/conciliador-regras/?empresa=${state.empresaId}&ativo=true`);
+        const rules = Array.isArray(data) ? data : (data?.results || []);
+        state.regrasMap = {};
+        rules.forEach((r) => {
+          const nk = historicNormKey(r.texto_referencia);
+          state.regrasMap[nk] = {
+            id: r.id,
+            codDebito: r.conta_debito || "",
+            codCredito: r.conta_credito || "",
+            codHistorico: r.codigo_historico || "",
+          };
+        });
+        applyApiRulesToLancamentos();
+        renderTable();
+      } catch (err) {
+        logWarn("Falha ao carregar regras de conciliação.", err);
+      }
+    }
+
+    function applyApiRulesToLancamentos() {
+      state.lancamentos.forEach((l) => {
+        const nk = historicNormKey(l.historico);
+        if (state.regrasMap[nk]) {
+          state.regras[lancamentoKey(l)] = { ...state.regrasMap[nk] };
+        }
+      });
+    }
+
+    function parseBRLInput(str) {
+      // Aceita "20,00" ou "20.00" ou "1.234,56"
+      const s = String(str || "").trim().replace(/\./g, "").replace(",", ".");
+      const n = parseFloat(s);
+      return isFinite(n) && n > 0 ? n : null;
+    }
+
+    // ── Dialog de detalhe ─────────────────────────────────────────────────
+    const detalheDialog = panel.querySelector("[data-detalhe-dialog]");
+    const detalheHist = panel.querySelector("[data-detalhe-hist]");
+    const detalheData = panel.querySelector("[data-detalhe-data]");
+    const detalheDoc = panel.querySelector("[data-detalhe-doc]");
+    const detalheValor = panel.querySelector("[data-detalhe-valor]");
+    const detalheNatureza = panel.querySelector("[data-detalhe-natureza]");
+    const detalheList = panel.querySelector("[data-detalhe-list]");
+    const detalheEmpty = panel.querySelector("[data-detalhe-empty]");
+    const detalheDistribuido = panel.querySelector("[data-detalhe-distribuido]");
+    const detalheRestante = panel.querySelector("[data-detalhe-restante]");
+    const detalheFill = panel.querySelector("[data-detalhe-progress-fill]");
+    const detalheAddForm = panel.querySelector("[data-detalhe-add-form]");
+    const detalheAddError = panel.querySelector("[data-detalhe-add-error]");
+    const detalheClose = panel.querySelector("[data-detalhe-close]");
+    const detalheRegrasForm = panel.querySelector("[data-detalhe-regras-form]");
+    const detalheRegrasError = panel.querySelector("[data-detalhe-regras-error]");
+    const detalheRegrasOk = panel.querySelector("[data-detalhe-regras-ok]");
+    const detalheRegraSalva = panel.querySelector("[data-detalhe-regra-salva]");
+    const detalheRegraCodDebito = panel.querySelector("[data-detalhe-regra-cod-debito]");
+    const detalheRegraCodCredito = panel.querySelector("[data-detalhe-regra-cod-credito]");
+    const detalheRegraCodHistorico = panel.querySelector("[data-detalhe-regra-cod-historico]");
+    const extrairXlsBtn = panel.querySelector("[data-extrato-extrair-xls]");
+    const selectEmpresa = panel.querySelector("[data-extrato-empresa]");
+
+    function renderRegraSalva(r) {
+      if (!detalheRegraSalva) return;
+      const temRegra = r && (r.codDebito || r.codCredito || r.codHistorico);
+      if (temRegra) {
+        if (detalheRegraCodDebito) detalheRegraCodDebito.textContent = r.codDebito || "—";
+        if (detalheRegraCodCredito) detalheRegraCodCredito.textContent = r.codCredito || "—";
+        if (detalheRegraCodHistorico) detalheRegraCodHistorico.textContent = r.codHistorico || "—";
+        detalheRegraSalva.hidden = false;
+      } else {
+        detalheRegraSalva.hidden = true;
+      }
+    }
+
+    function openDetalhe(l) {
+      if (!detalheDialog) return;
+      const key = lancamentoKey(l);
+      state.detalheKey = key;
+
+      if (detalheHist) detalheHist.textContent = l.historico || "—";
+      if (detalheData) detalheData.textContent = formatDateBR(l.data) || "—";
+      if (detalheDoc) detalheDoc.textContent = l.documento || "—";
+      if (detalheValor) detalheValor.textContent = formatCurrency(l.valor);
+      if (detalheNatureza) detalheNatureza.innerHTML = naturezaBadge(l.natureza);
+      if (detalheAddForm) detalheAddForm.reset();
+      if (detalheAddError) { detalheAddError.textContent = ""; detalheAddError.hidden = true; }
+
+      if (detalheRegrasForm) {
+        const nk = historicNormKey(l.historico);
+        const r = state.regras[key] || state.regrasMap[nk] || {};
+        detalheRegrasForm.elements.codDebito.value = r.codDebito || "";
+        detalheRegrasForm.elements.codCredito.value = r.codCredito || "";
+        detalheRegrasForm.elements.codHistorico.value = r.codHistorico || "";
+        renderRegraSalva(r);
+      }
+      if (detalheRegrasError) { detalheRegrasError.textContent = ""; detalheRegrasError.hidden = true; }
+      if (detalheRegrasOk) { detalheRegrasOk.hidden = true; detalheRegrasOk.style.display = "none"; }
+
+      renderDetalheList();
+
+      if (typeof detalheDialog.showModal === "function" && !detalheDialog.open) {
+        detalheDialog.showModal();
+      } else {
+        detalheDialog.setAttribute("open", "open");
+      }
+    }
+
+    function closeDetalhe() {
+      state.detalheKey = null;
+      if (typeof detalheDialog?.close === "function" && detalheDialog.open) {
+        detalheDialog.close();
+      } else if (detalheDialog) {
+        detalheDialog.removeAttribute("open");
+      }
+    }
+
+    function renderDetalheList() {
+      if (!detalheList) return;
+      const key = state.detalheKey;
+      const l = state.lancamentos.find((x) => lancamentoKey(x) === key);
+      if (!l) return;
+
+      const valorOriginal = parseFloat(l.valor || 0);
+      const comps = state.componentes[key] || [];
+      const totalDist = comps.reduce((s, c) => s + c.valor, 0);
+      const restante = valorOriginal - totalDist;
+      const pct = valorOriginal > 0 ? Math.min(100, (totalDist / valorOriginal) * 100) : 0;
+
+      if (detalheDistribuido) detalheDistribuido.textContent = formatCurrency(totalDist);
+      if (detalheRestante) {
+        detalheRestante.textContent = formatCurrency(Math.max(0, restante));
+        detalheRestante.style.color = restante < -0.005 ? "#b91c1c" : "";
+      }
+      if (detalheFill) detalheFill.style.width = `${pct.toFixed(1)}%`;
+
+      if (!comps.length) {
+        detalheList.innerHTML = '<li class="detalhe-componentes-empty" data-detalhe-empty>Nenhum componente adicionado ainda.</li>';
+        return;
+      }
+
+      detalheList.innerHTML = comps.map((c, i) => `
+        <li class="detalhe-comp-item">
+          <span class="detalhe-comp-desc">${escapeHtml(c.descricao)}</span>
+          <span class="detalhe-comp-valor">${escapeHtml(formatCurrency(c.valor))}</span>
+          <button type="button" class="detalhe-comp-remove" data-comp-idx="${i}" title="Remover" aria-label="Remover ${escapeHtml(c.descricao)}">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M18 6L6 18M6 6l12 12"/>
+            </svg>
+          </button>
+        </li>
+      `).join("");
+
+      detalheList.querySelectorAll("[data-comp-idx]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const idx = parseInt(btn.dataset.compIdx, 10);
+          state.componentes[key].splice(idx, 1);
+          if (!state.componentes[key].length) delete state.componentes[key];
+          renderDetalheList();
+          renderTable();
+        });
+      });
+    }
+
+    if (detalheClose) {
+      detalheClose.addEventListener("click", closeDetalhe);
+    }
+
+    if (detalheDialog) {
+      detalheDialog.addEventListener("click", (e) => {
+        if (e.target === detalheDialog) closeDetalhe();
+      });
+    }
+
+    if (detalheAddForm) {
+      detalheAddForm.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const desc = String(detalheAddForm.elements.descricao?.value || "").trim();
+        const valorInput = String(detalheAddForm.elements.valor?.value || "").trim();
+        const valor = parseBRLInput(valorInput);
+
+        if (!desc) {
+          if (detalheAddError) { detalheAddError.textContent = "Informe a descrição."; detalheAddError.hidden = false; }
+          return;
+        }
+        if (!valor) {
+          if (detalheAddError) { detalheAddError.textContent = "Informe um valor válido maior que zero."; detalheAddError.hidden = false; }
+          return;
+        }
+
+        const key = state.detalheKey;
+        const l = state.lancamentos.find((x) => lancamentoKey(x) === key);
+        const valorOriginal = parseFloat(l?.valor || 0);
+        const compsAtuais = state.componentes[key] || [];
+        const totalDist = compsAtuais.reduce((s, c) => s + c.valor, 0);
+
+        if (totalDist + valor > valorOriginal + 0.005) {
+          if (detalheAddError) {
+            detalheAddError.textContent = `Valor excede o restante (${formatCurrency(Math.max(0, valorOriginal - totalDist))}).`;
+            detalheAddError.hidden = false;
+          }
+          return;
+        }
+
+        if (detalheAddError) detalheAddError.hidden = true;
+        if (!state.componentes[key]) state.componentes[key] = [];
+        state.componentes[key].push({ descricao: desc, valor });
+        detalheAddForm.reset();
+        detalheAddForm.elements.descricao?.focus();
+        renderDetalheList();
+        renderTable();
+      });
+    }
+
+    if (detalheRegrasForm) {
+      detalheRegrasForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const key = state.detalheKey;
+        if (!key) return;
+        const codDebito = String(detalheRegrasForm.elements.codDebito?.value || "").trim();
+        const codCredito = String(detalheRegrasForm.elements.codCredito?.value || "").trim();
+        const codHistorico = String(detalheRegrasForm.elements.codHistorico?.value || "").trim();
+        if (!codDebito && !codCredito && !codHistorico) {
+          if (detalheRegrasError) { detalheRegrasError.textContent = "Preencha ao menos um código."; detalheRegrasError.hidden = false; }
+          return;
+        }
+        if (detalheRegrasError) { detalheRegrasError.textContent = ""; detalheRegrasError.hidden = true; }
+
+        const l = state.lancamentos.find((x) => lancamentoKey(x) === key);
+        if (!l) return;
+
+        const saveBtn = detalheRegrasForm.querySelector(".detalhe-regras-save-btn");
+        if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = "Salvando..."; }
+
+        try {
+          // Garante escritorioId carregado
+          if (!state.escritorioId) {
+            const escsData = await apiRequest(session, "/escritorios/");
+            const escs = Array.isArray(escsData) ? escsData : (escsData?.results || []);
+            if (escs.length > 0) state.escritorioId = escs[0].id;
+          }
+          if (!state.escritorioId) {
+            throw new Error("Escritório não encontrado. Recarregue a página.");
+          }
+
+          const nk = historicNormKey(l.historico);
+          const existing = state.regrasMap[nk];
+          let savedRule;
+
+          if (existing?.id) {
+            // Atualiza regra existente
+            savedRule = await apiRequest(session, `/conciliador-regras/${existing.id}/`, {
+              method: "PATCH",
+              body: {
+                conta_debito: codDebito,
+                conta_credito: codCredito,
+                codigo_historico: codHistorico,
+              },
+            });
+          } else {
+            // Cria nova regra
+            savedRule = await apiRequest(session, "/conciliador-regras/", {
+              method: "POST",
+              body: {
+                escritorio: state.escritorioId,
+                empresa: state.empresaId || undefined,
+                nome: l.historico.slice(0, 255),
+                texto_referencia: l.historico.slice(0, 255),
+                tipo_comparacao: "CONTEM",
+                conta_debito: codDebito,
+                conta_credito: codCredito,
+                codigo_historico: codHistorico,
+              },
+            });
+          }
+
+          // Atualiza estado local e aplica a todos lançamentos com mesmo histórico
+          const ruleData = { id: savedRule.id, codDebito, codCredito, codHistorico };
+          state.regrasMap[nk] = ruleData;
+          state.lancamentos.forEach((lc) => {
+            if (historicNormKey(lc.historico) === nk) {
+              state.regras[lancamentoKey(lc)] = { ...ruleData };
+            }
+          });
+          renderTable();
+          renderRegraSalva(ruleData);
+
+          if (detalheRegrasOk) {
+            detalheRegrasOk.hidden = false;
+            detalheRegrasOk.style.display = "flex";
+            setTimeout(() => {
+              if (detalheRegrasOk) {
+                detalheRegrasOk.hidden = true;
+                detalheRegrasOk.style.display = "none";
+              }
+            }, 3000);
+          }
+        } catch (err) {
+          if (detalheRegrasError) {
+            detalheRegrasError.textContent = err.message || "Falha ao salvar a regra.";
+            detalheRegrasError.hidden = false;
+          }
+        } finally {
+          if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = "Salvar regra"; }
+        }
+      });
+    }
+
+    if (extrairXlsBtn) {
+      extrairXlsBtn.addEventListener("click", () => {
+        if (!window.XLSX) {
+          alert("Biblioteca XLSX não carregada. Verifique sua conexão com a internet.");
+          return;
+        }
+        const rows = [["Data", "Conta Crédito", "Conta Débito", "Cód. Histórico", "Valor"]];
+        state.lancamentos.forEach((l) => {
+          const key = lancamentoKey(l);
+          const r = state.regras[key] || {};
+          rows.push([
+            l.data || "",
+            r.codCredito || "",
+            r.codDebito || "",
+            r.codHistorico || "",
+            parseFloat(l.valor || 0),
+          ]);
+        });
+        const ws = window.XLSX.utils.aoa_to_sheet(rows);
+        // Formata coluna Valor como número
+        const range = window.XLSX.utils.decode_range(ws["!ref"]);
+        for (let R = 1; R <= range.e.r; R++) {
+          const cell = ws[window.XLSX.utils.encode_cell({ r: R, c: 4 })];
+          if (cell) cell.z = "#,##0.00";
+        }
+        const wb = window.XLSX.utils.book_new();
+        window.XLSX.utils.book_append_sheet(wb, ws, "Extrato");
+        window.XLSX.writeFile(wb, "extrato_conciliacao.xlsx");
+      });
+    }
+
+    // Clique nas linhas da tabela → abre detalhe
+    tbody.addEventListener("click", (e) => {
+      const row = e.target.closest("[data-linha-key]");
+      if (!row) return;
+      const key = row.dataset.linhaKey;
+      const l = state.lancamentos.find((x) => lancamentoKey(x) === key);
+      if (l) openDetalhe(l);
+    });
+
+    // ── Wiring ────────────────────────────────────────────────────────────
+    filterChips.forEach((chip) => {
+      chip.addEventListener("click", () => setActiveChip(chip.dataset.extratoNaturezaFilter || "TODOS"));
+    });
+
+    if (searchInput) {
+      searchInput.addEventListener("input", () => {
+        state.busca = searchInput.value;
+        renderTable();
+      });
+    }
+
+    // ── Criar Perfil a partir do extrato ─────────────────────────────────
+    if (criarPerfilBtn) {
+      criarPerfilBtn.addEventListener("click", () => {
+        if (!state.extratoMeta) return;
+        const banco = state.extratoMeta.banco;
+        const bancoLabel = banco === "bradesco" ? "Bradesco" : banco.charAt(0).toUpperCase() + banco.slice(1);
+        const nomeBase = state.extratoMeta.empresa_nome || "Empresa";
+        document.dispatchEvent(new CustomEvent("extrato:criar-perfil", {
+          detail: {
+            nome: `${nomeBase} - ${bancoLabel}`,
+            cnpj: state.extratoMeta.empresa_cnpj,
+          },
+        }));
+      });
+    }
+
+    // ── Submit ────────────────────────────────────────────────────────────
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      setError("");
+
+      const file = fileInput.files?.[0];
+      if (!file) {
+        setError("Selecione um arquivo PDF.");
+        return;
+      }
+
+      if (!state.empresaId) {
+        setError("Selecione uma empresa antes de processar o extrato.");
+        return;
+      }
+
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = "Processando...";
+      }
+
+      try {
+        const formData = new FormData(form);
+        const resp = await fetch(apiUrl("/extrato-preview/"), {
+          method: "POST",
+          headers: { Authorization: `Bearer ${session.accessToken}` },
+          body: formData,
+        });
+
+        const payload = resp.ok ? await resp.json() : await resp.json().catch(() => ({}));
+
+        if (!resp.ok) {
+          throw new Error(payload.detail || `Erro ${resp.status}`);
+        }
+
+        state.lancamentos = payload.lancamentos || [];
+        state.regras = {};
+        state.filtroNatureza = "TODOS";
+        state.busca = "";
+        if (searchInput) searchInput.value = "";
+
+        // Carrega regras da API para a empresa selecionada
+        loadRegrasFromAPI();
+
+        // Metadados
+        if (metaEl) {
+          const partes = [];
+          if (payload.empresa_nome) partes.push(`<strong>${escapeHtml(payload.empresa_nome)}</strong>`);
+          if (payload.empresa_cnpj) partes.push(`CNPJ: ${escapeHtml(payload.empresa_cnpj)}`);
+          if (payload.agencia && payload.conta) partes.push(`Ag: ${escapeHtml(payload.agencia)} | CC: ${escapeHtml(payload.conta)}`);
+          if (payload.periodo_inicio && payload.periodo_fim) {
+            partes.push(`Período: ${escapeHtml(formatDateBR(payload.periodo_inicio))} a ${escapeHtml(formatDateBR(payload.periodo_fim))}`);
+          }
+          partes.push(`${payload.total} lançamentos`);
+          metaEl.innerHTML = partes.map((p) => `<span class="extrato-meta-item">${p}</span>`).join("");
+        }
+
+        state.extratoMeta = {
+          banco: payload.banco || "auto",
+          empresa_nome: payload.empresa_nome || "",
+          empresa_cnpj: payload.empresa_cnpj || "",
+          agencia: payload.agencia || "",
+          conta: payload.conta || "",
+        };
+
+        updateCounts();
+        setActiveChip("TODOS");
+
+        if (resultCard) resultCard.hidden = false;
+        resultCard?.scrollIntoView({ behavior: "smooth", block: "start" });
+
+      } catch (err) {
+        setError(err.message || "Falha ao processar o extrato.");
+        logWarn("Falha ao processar extrato.", err);
+      } finally {
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.textContent = "Processar extrato";
+        }
+      }
+    });
+
+    // ── Empresa select ────────────────────────────────────────────────────
+    if (selectEmpresa) {
+      selectEmpresa.addEventListener("change", () => {
+        state.empresaId = selectEmpresa.value || null;
+      });
+    }
+
+    // ── Inicialização ─────────────────────────────────────────────────────
+    (async () => {
+      // Carrega escritório primário
+      try {
+        const data = await apiRequest(session, "/escritorios/");
+        const escs = Array.isArray(data) ? data : (data?.results || []);
+        if (escs.length > 0) state.escritorioId = escs[0].id;
+      } catch (err) {
+        logWarn("Falha ao carregar escritório.", err);
+      }
+
+      // Carrega empresas (clientes) para o select
+      try {
+        const data = await apiRequest(session, "/clientes/");
+        const clientes = Array.isArray(data) ? data : (data?.results || []);
+        if (selectEmpresa) {
+          selectEmpresa.innerHTML = '<option value="">Selecione a empresa...</option>' +
+            clientes.map((c) => `<option value="${escapeHtml(c.id)}">${escapeHtml(c.nome)}${c.cpf_cnpj ? ` (${escapeHtml(c.cpf_cnpj)})` : ""}</option>`).join("");
+          // auto-seleciona se houver apenas 1 empresa
+          if (clientes.length === 1) {
+            selectEmpresa.value = clientes[0].id;
+            state.empresaId = clientes[0].id;
+          }
+        }
+      } catch (err) {
+        logWarn("Falha ao carregar empresas.", err);
+        if (selectEmpresa) selectEmpresa.innerHTML = '<option value="">Erro ao carregar empresas</option>';
+      }
+    })();
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
 
   function setupConciliadorDraft() {
     const panel = document.querySelector('[data-panel-view-section="conciliador"]');
@@ -3016,6 +4106,8 @@ function setClientFormMode(mode) {
 
       setupPanelNavigation();
       setupClientsCrud(session);
+      setupPerfisCrud(session);
+      setupExtratoImport(session);
       setupConciliadorDraft();
       setPanelView(getInitialPanelView(), { updateUrl: false });
       updatePanelWithSession(session);

@@ -1,26 +1,290 @@
 <section class="panel-view" data-panel-view-section="conciliador">
-  <section class="conciliador-header">
-    <h2>Conciliação Bancária</h2>
-    <p>Gerencie suas conciliações bancárias.</p>
+
+  <!-- Cabeçalho -->
+  <section class="conciliador-header card">
+    <div class="conciliador-copy">
+      <h2>Conciliação Bancária</h2>
+      <p>Importe um extrato bancário em PDF, visualize os lançamentos e filtre por natureza.</p>
+    </div>
   </section>
-  <section class="conciliador-toolbar">
-    <select name="escritorio" data-conciliador-escritorio>
-      <option value="">Selecione o escritório...</option>
-    </select>
-    <select name="cliente" data-conciliador-cliente disabled>
-      <option value="">Selecione o cliente...</option>
-    </select>
-    <input type="month" name="periodo_inicio" data-conciliador-periodo-inicio disabled />
-    <input type="month" name="periodo_fim" data-conciliador-periodo-fim disabled />
-    <button type="button" class="primary" data-conciliador-filtrar>Filtrar</button>
-  </section>
-  <section class="content-grid">
-    <article class="card">
-      <div class="conciliador-list" data-conciliador-list>
-        <div class="empty-state" data-conciliador-empty>
-          Nenhuma conciliação encontrada.
+
+  <!-- Formulário de importação -->
+  <section class="card extrato-import-card">
+    <form id="extrato-import-form" data-extrato-form enctype="multipart/form-data">
+      <div class="extrato-import-grid">
+
+        <!-- Seleção da empresa (cliente) -->
+        <label class="extrato-field">
+          <span>Empresa</span>
+          <div class="conciliador-control">
+            <select name="empresa_id" data-extrato-empresa>
+              <option value="">Carregando empresas...</option>
+            </select>
+            <span class="conciliador-control-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="m6 9 6 6 6-6"/>
+              </svg>
+            </span>
+          </div>
+        </label>
+
+        <!-- Seleção do banco -->
+        <label class="extrato-field">
+          <span>Banco</span>
+          <div class="conciliador-control">
+            <select name="banco" data-extrato-banco>
+              <option value="auto">Detectar automaticamente</option>
+              <option value="bradesco">Bradesco Net Empresa</option>
+            </select>
+            <span class="conciliador-control-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="m6 9 6 6 6-6"/>
+              </svg>
+            </span>
+          </div>
+        </label>
+
+        <!-- Upload do arquivo -->
+        <label class="extrato-field extrato-field--file">
+          <span>Arquivo PDF do extrato</span>
+          <div class="extrato-dropzone" data-extrato-dropzone>
+            <input type="file" name="arquivo" accept=".pdf" data-extrato-file-input required />
+            <div class="extrato-dropzone-inner">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="17 8 12 3 7 8"/>
+                <line x1="12" y1="3" x2="12" y2="15"/>
+              </svg>
+              <span data-extrato-file-label>Clique ou arraste o PDF aqui</span>
+            </div>
+          </div>
+        </label>
+
+        <!-- Botão -->
+        <div class="extrato-field extrato-field--action">
+          <span>&nbsp;</span>
+          <button type="submit" class="primary" data-extrato-submit>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+            </svg>
+            Processar extrato
+          </button>
         </div>
       </div>
-    </article>
+      <p class="extrato-form-error" data-extrato-error hidden></p>
+    </form>
   </section>
+
+  <!-- Resultado da extração -->
+  <section class="card extrato-result-card" data-extrato-result hidden>
+
+    <!-- Info do extrato -->
+    <div class="extrato-result-header" data-extrato-result-header>
+      <div class="extrato-result-meta" data-extrato-meta></div>
+      <div class="extrato-result-actions">
+        <button type="button" class="secondary extrato-btn-criar-perfil" data-extrato-criar-perfil>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 5v14M5 12h14"/>
+          </svg>
+          Criar Perfil
+        </button>
+        <button type="button" class="secondary extrato-btn-extrair-xls" data-extrato-extrair-xls>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="7 10 12 15 17 10"/>
+            <line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+          Extrair XLS
+        </button>
+      </div>
+    </div>
+
+    <!-- Barra de filtros -->
+    <div class="extrato-filter-bar">
+      <div class="extrato-filter-chips">
+        <button type="button" class="extrato-chip is-active" data-extrato-natureza-filter="TODOS">
+          Todos
+          <span class="extrato-chip-count" data-extrato-count-todos>0</span>
+        </button>
+        <button type="button" class="extrato-chip extrato-chip--credito" data-extrato-natureza-filter="CREDITO">
+          Crédito
+          <span class="extrato-chip-count" data-extrato-count-credito>0</span>
+        </button>
+        <button type="button" class="extrato-chip extrato-chip--debito" data-extrato-natureza-filter="DEBITO">
+          Débito
+          <span class="extrato-chip-count" data-extrato-count-debito>0</span>
+        </button>
+        <button type="button" class="extrato-chip extrato-chip--indefinido" data-extrato-natureza-filter="INDEFINIDA">
+          Indefinido
+          <span class="extrato-chip-count" data-extrato-count-indefinido>0</span>
+        </button>
+      </div>
+
+      <!-- Busca -->
+      <div class="extrato-search-wrap">
+        <input type="search" class="perfis-search" placeholder="Buscar no histórico..." data-extrato-search />
+      </div>
+    </div>
+
+    <!-- Tabela -->
+    <div class="extrato-table-wrap">
+      <table class="extrato-table">
+        <thead>
+          <tr>
+            <th>Data</th>
+            <th>Histórico</th>
+            <th>Documento</th>
+            <th class="text-right">Valor (R$)</th>
+            <th>Natureza</th>
+          </tr>
+        </thead>
+        <tbody data-extrato-tbody>
+          <tr data-extrato-empty>
+            <td colspan="5" class="empty-state">Nenhum lançamento encontrado.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Totais -->
+    <div class="extrato-totals" data-extrato-totals hidden>
+      <div class="extrato-total-item extrato-total--credito">
+        <span>Total Créditos</span>
+        <strong data-extrato-total-credito>R$ 0,00</strong>
+      </div>
+      <div class="extrato-total-item extrato-total--debito">
+        <span>Total Débitos</span>
+        <strong data-extrato-total-debito>R$ 0,00</strong>
+      </div>
+      <div class="extrato-total-item extrato-total--saldo">
+        <span>Saldo (créditos - débitos)</span>
+        <strong data-extrato-total-saldo>R$ 0,00</strong>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Dialog de detalhe do lançamento ────────────────────────────────── -->
+  <dialog class="detalhe-dialog" data-detalhe-dialog aria-modal="true" aria-labelledby="detalheDialogTitle">
+    <div class="detalhe-dialog-inner">
+
+      <!-- Cabeçalho -->
+      <div class="detalhe-dialog-head">
+        <div>
+          <p class="detalhe-dialog-label">Detalhar lançamento</p>
+          <h3 id="detalheDialogTitle" class="detalhe-dialog-hist" data-detalhe-hist></h3>
+        </div>
+        <button type="button" class="detalhe-dialog-close" data-detalhe-close aria-label="Fechar">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M18 6L6 18M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Resumo do lançamento -->
+      <div class="detalhe-resumo">
+        <div class="detalhe-resumo-item">
+          <span>Data</span>
+          <strong data-detalhe-data></strong>
+        </div>
+        <div class="detalhe-resumo-item">
+          <span>Documento</span>
+          <strong data-detalhe-doc></strong>
+        </div>
+        <div class="detalhe-resumo-item">
+          <span>Valor original</span>
+          <strong data-detalhe-valor></strong>
+        </div>
+        <div class="detalhe-resumo-item">
+          <span>Natureza</span>
+          <strong data-detalhe-natureza></strong>
+        </div>
+      </div>
+
+      <!-- Barra de distribuição -->
+      <div class="detalhe-progress-wrap">
+        <div class="detalhe-progress-bar">
+          <div class="detalhe-progress-fill" data-detalhe-progress-fill style="width: 0%"></div>
+        </div>
+        <div class="detalhe-progress-labels">
+          <span>Distribuído: <strong data-detalhe-distribuido>R$ 0,00</strong></span>
+          <span>Restante: <strong data-detalhe-restante></strong></span>
+        </div>
+      </div>
+
+      <!-- Lista de componentes -->
+      <div class="detalhe-componentes-wrap">
+        <p class="detalhe-componentes-title">Componentes</p>
+        <ul class="detalhe-componentes-list" data-detalhe-list>
+          <li class="detalhe-componentes-empty" data-detalhe-empty>Nenhum componente adicionado ainda.</li>
+        </ul>
+      </div>
+
+      <!-- Formulário para adicionar componente -->
+      <form class="detalhe-add-form" data-detalhe-add-form novalidate>
+        <div class="detalhe-add-grid">
+          <input type="text" name="descricao" class="detalhe-add-desc" placeholder="Descrição (ex: Juros)" autocomplete="off" required />
+          <input type="text" name="valor" class="detalhe-add-valor" placeholder="Valor (ex: 20,00)" autocomplete="off" required inputmode="decimal" />
+          <button type="submit" class="primary detalhe-add-btn">Adicionar</button>
+        </div>
+        <p class="detalhe-add-error" data-detalhe-add-error hidden></p>
+      </form>
+
+      <!-- Regras de conciliação -->
+      <div class="detalhe-regras-wrap">
+        <p class="detalhe-componentes-title">Regras de Conciliação</p>
+
+        <!-- Card: regra atualmente salva -->
+        <div class="detalhe-regra-salva" data-detalhe-regra-salva hidden>
+          <div class="detalhe-regra-salva-grid">
+            <div class="detalhe-regra-salva-item">
+              <span>Cód. Débito</span>
+              <strong data-detalhe-regra-cod-debito>—</strong>
+            </div>
+            <div class="detalhe-regra-salva-item">
+              <span>Cód. Crédito</span>
+              <strong data-detalhe-regra-cod-credito>—</strong>
+            </div>
+            <div class="detalhe-regra-salva-item">
+              <span>Cód. Histórico</span>
+              <strong data-detalhe-regra-cod-historico>—</strong>
+            </div>
+          </div>
+        </div>
+
+        <form class="detalhe-regras-form" data-detalhe-regras-form novalidate>
+          <div class="detalhe-regras-grid">
+            <label class="detalhe-regras-field">
+              <span>Cód. Débito</span>
+              <input type="text" name="codDebito" placeholder="Ex: 1.1.01" autocomplete="off" />
+            </label>
+            <label class="detalhe-regras-field">
+              <span>Cód. Crédito</span>
+              <input type="text" name="codCredito" placeholder="Ex: 2.1.01" autocomplete="off" />
+            </label>
+            <label class="detalhe-regras-field">
+              <span>Cód. Histórico</span>
+              <input type="text" name="codHistorico" placeholder="Ex: H001" autocomplete="off" />
+            </label>
+          </div>
+          <div class="detalhe-regras-footer">
+            <p class="detalhe-regras-error" data-detalhe-regras-error hidden></p>
+            <p class="detalhe-regras-ok" data-detalhe-regras-ok hidden>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>
+              Regra salva com sucesso!
+            </p>
+            <button type="submit" class="primary detalhe-regras-save-btn">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                <polyline points="17 21 17 13 7 13 7 21"/>
+                <polyline points="7 3 7 8 15 8"/>
+              </svg>
+              Salvar regra
+            </button>
+          </div>
+        </form>
+      </div>
+
+    </div>
+  </dialog>
+
 </section>

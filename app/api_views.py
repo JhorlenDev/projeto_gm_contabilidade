@@ -7,6 +7,7 @@ from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from permissions.authentication import KeycloakJWTAuthentication
 from permissions.permissions import HasUserGMRole
@@ -19,11 +20,12 @@ from services.conciliador import (
 )
 from services.pdf_parser import process_extrato_pdf
 
-from .models import Cliente, Escritorio, ImportacaoExtrato, RegraConciliador, StatusImportacao, TransacaoImportada
+from .models import Cliente, Escritorio, ImportacaoExtrato, PerfilConciliacao, RegraConciliador, StatusImportacao, TransacaoImportada
 from .serializers import (
     ClienteSerializer,
     EscritorioSerializer,
     ImportacaoExtratoSerializer,
+    PerfilConciliacaoSerializer,
     RegraConciliadorSerializer,
     TransacaoImportadaSerializer,
 )
@@ -235,3 +237,96 @@ class TransacaoImportadaViewSet(viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         serializer.save(revisado_manual=True)
+
+
+class PerfilConciliacaoViewSet(viewsets.ModelViewSet):
+    authentication_classes = [KeycloakJWTAuthentication]
+    permission_classes = [HasUserGMRole]
+    serializer_class = PerfilConciliacaoSerializer
+    queryset = PerfilConciliacao.objects.select_related("escritorio", "empresa")
+    lookup_field = "id"
+    lookup_value_regex = r"[0-9a-fA-F-]{36}"
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ["nome", "descricao", "conta_bancaria", "codigo_historico", "codigo_empresa", "cnpj"]
+    ordering_fields = ["nome", "criado_em", "atualizado_em"]
+    ordering = ["nome"]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        escritorio_id = self.request.query_params.get("escritorio")
+        empresa_id = self.request.query_params.get("empresa")
+
+        if escritorio_id:
+            queryset = queryset.filter(escritorio_id=escritorio_id)
+        if empresa_id:
+            queryset = queryset.filter(empresa_id=empresa_id)
+
+        ativo = self.request.query_params.get("ativo")
+        if ativo in {"true", "1", "yes"}:
+            queryset = queryset.filter(ativo=True)
+        elif ativo in {"false", "0", "no"}:
+            queryset = queryset.filter(ativo=False)
+
+        return queryset
+
+
+class ExtratoPreviewView(APIView):
+    """
+    POST /api/extrato-preview/
+    Recebe um arquivo PDF de extrato bancário e retorna os lançamentos parseados
+    sem salvar nada no banco de dados.
+
+    Form fields:
+      - arquivo: arquivo PDF
+      - banco: "bradesco" | "auto" (default: "auto")
+    """
+    authentication_classes = [KeycloakJWTAuthentication]
+    permission_classes = [HasUserGMRole]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request, *args, **kwargs):
+        arquivo = request.FILES.get("arquivo")
+        if not arquivo:
+            return Response({"detail": "Nenhum arquivo enviado."}, status=status.HTTP_400_BAD_REQUEST)
+
+        ext = arquivo.name.rsplit(".", 1)[-1].lower() if "." in arquivo.name else ""
+        if ext != "pdf":
+            return Response({"detail": "Apenas arquivos PDF são suportados."}, status=status.HTTP_400_BAD_REQUEST)
+
+        banco = request.data.get("banco", "auto").lower().strip()
+
+        resultado = process_extrato_pdf(arquivo, banco=banco)
+
+        if not resultado.success:
+            return Response(
+                {"detail": "; ".join(resultado.erros) or "Falha ao processar o PDF."},
+                status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
+
+        lancamentos = [
+            {
+                "linha": l.linha_origem,
+                "data": l.data.isoformat() if l.data else None,
+                "historico": l.descricao_original,
+                "documento": l.documento,
+                "valor": str(l.valor),
+                "natureza": l.natureza_inferida or "INDEFINIDA",
+                "saldo": str(l.saldo) if l.saldo is not None else None,
+            }
+            for l in resultado.lancamentos
+        ]
+
+        header = resultado.header
+        return Response({
+            "banco": banco if banco != "auto" else "auto-detectado",
+            "empresa_nome": header.empresa_nome,
+            "empresa_cnpj": header.empresa_cnpj,
+            "agencia": header.agencia,
+            "conta": header.conta,
+            "periodo_inicio": header.periodo_inicio.isoformat() if header.periodo_inicio else None,
+            "periodo_fim": header.periodo_fim.isoformat() if header.periodo_fim else None,
+            "saldo_final": str(header.saldo),
+            "total": resultado.total_lancamentos,
+            "avisos": resultado.avisos,
+            "lancamentos": lancamentos,
+        })
