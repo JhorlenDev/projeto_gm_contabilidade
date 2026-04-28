@@ -2925,6 +2925,7 @@ function setClientFormMode(mode) {
       empresaId: null,   // empresa selecionada para este extrato
       escritorioId: null, // escritório principal (carregado da API)
       regrasMap: {},     // keyed por historicNormKey → { id, codDebito, codCredito, codHistorico }
+      regrasFlexi: [],   // todas as regras ordenadas por prioridade (para matching CONTEM/IGUAL/COMECA_COM)
     };
 
     // ── Dropzone drag & drop ──────────────────────────────────────────────
@@ -3061,27 +3062,59 @@ function setClientFormMode(mode) {
         const data = await apiRequest(session, `/conciliador-regras/?empresa=${state.empresaId}&ativo=true`);
         const rules = Array.isArray(data) ? data : (data?.results || []);
         state.regrasMap = {};
+        state.regrasFlexi = [];
         rules.forEach((r) => {
           const nk = historicNormKey(r.texto_referencia);
-          state.regrasMap[nk] = {
+          const entry = {
             id: r.id,
             codDebito: r.conta_debito || "",
             codCredito: r.conta_credito || "",
             codHistorico: r.codigo_historico || "",
           };
+          state.regrasMap[nk] = entry;
+          state.regrasFlexi.push({
+            ...entry,
+            textoRef: r.texto_referencia || "",
+            tipoComp: r.tipo_comparacao || "CONTEM",
+            tipoMov: r.tipo_movimento || "AMBOS",
+            prioridade: r.prioridade ?? 100,
+            nome: r.nome || r.texto_referencia || "",
+          });
         });
+        // Ordena: menor prioridade = aplica primeiro
+        state.regrasFlexi.sort((a, b) => a.prioridade - b.prioridade);
         applyApiRulesToLancamentos();
+        renderRegrasAutoList();
         renderTable();
       } catch (err) {
         logWarn("Falha ao carregar regras de conciliação.", err);
       }
     }
 
+    function matchesRule(desc, textoRef, tipoComp) {
+      const ref = textoRef.toLowerCase();
+      if (tipoComp === "IGUAL") return desc === ref;
+      if (tipoComp === "COMECA_COM") return desc.startsWith(ref);
+      return desc.includes(ref); // CONTEM (padrão)
+    }
+
     function applyApiRulesToLancamentos() {
       state.lancamentos.forEach((l) => {
-        const nk = historicNormKey(l.historico);
-        if (state.regrasMap[nk]) {
-          state.regras[lancamentoKey(l)] = { ...state.regrasMap[nk] };
+        const desc = historicNormKey(l.historico);
+        const nat = (l.natureza || "").toUpperCase();
+        const regra = state.regrasFlexi.find((r) => {
+          // Filtro por tipo de movimento
+          if (r.tipoMov === "CREDITO" && nat !== "CREDITO") return false;
+          if (r.tipoMov === "DEBITO" && nat !== "DEBITO") return false;
+          return matchesRule(desc, r.textoRef, r.tipoComp);
+        });
+        if (regra) {
+          state.regras[lancamentoKey(l)] = {
+            id: regra.id,
+            codDebito: regra.codDebito,
+            codCredito: regra.codCredito,
+            codHistorico: regra.codHistorico,
+          };
         }
       });
     }
@@ -3116,7 +3149,169 @@ function setClientFormMode(mode) {
     const detalheRegraCodCredito = panel.querySelector("[data-detalhe-regra-cod-credito]");
     const detalheRegraCodHistorico = panel.querySelector("[data-detalhe-regra-cod-historico]");
     const extrairXlsBtn = panel.querySelector("[data-extrato-extrair-xls]");
+
+    // ── Regras Automáticas — refs ─────────────────────────────────────────
+    const regrasAutoSection = panel.querySelector("[data-regras-auto-section]");
+    const regrasAutoList = panel.querySelector("[data-regras-auto-list]");
+    const regrasAutoCount = panel.querySelector("[data-regras-auto-count]");
+    const regrasAutoAddBtn = panel.querySelector("[data-regras-auto-add-btn]");
+    const regrasAutoForm = panel.querySelector("[data-regras-auto-form]");
+    const regrasAutoCancel = panel.querySelector("[data-regras-auto-cancel]");
+    const regrasAutoFormError = panel.querySelector("[data-regras-auto-form-error]");
     const selectEmpresa = panel.querySelector("[data-extrato-empresa]");
+
+    // ── Regras Automáticas — render e CRUD ───────────────────────────────
+    const COMP_LABELS = { CONTEM: "Contém", IGUAL: "Igual", COMECA_COM: "Começa com" };
+    const MOV_LABELS = { AMBOS: "Ambos", CREDITO: "Só crédito", DEBITO: "Só débito" };
+
+    function renderRegrasAutoList() {
+      if (!regrasAutoSection) return;
+
+      // Mostra seção apenas quando há empresa selecionada
+      regrasAutoSection.hidden = !state.empresaId;
+      if (!state.empresaId) return;
+
+      const regras = state.regrasFlexi;
+      if (regrasAutoCount) regrasAutoCount.textContent = regras.length;
+
+      if (!regrasAutoList) return;
+      if (!regras.length) {
+        regrasAutoList.innerHTML = '<p class="regras-auto-item-empty">Nenhuma regra automática cadastrada para esta empresa.</p>';
+        return;
+      }
+
+      regrasAutoList.innerHTML = regras.map((r) => {
+        const codigos = [
+          r.codDebito ? `D: ${escapeHtml(r.codDebito)}` : "",
+          r.codCredito ? `C: ${escapeHtml(r.codCredito)}` : "",
+          r.codHistorico ? `H: ${escapeHtml(r.codHistorico)}` : "",
+        ].filter(Boolean).join(" · ");
+        const compLabel = COMP_LABELS[r.tipoComp] || r.tipoComp;
+        const movLabel = r.tipoMov !== "AMBOS" ? ` · ${MOV_LABELS[r.tipoMov] || r.tipoMov}` : "";
+        return `
+          <div class="regras-auto-item" data-regra-id="${escapeHtml(r.id)}">
+            <div class="regras-auto-item-body">
+              <span class="regras-auto-item-titulo" title="${escapeHtml(r.textoRef)}">
+                "${escapeHtml(r.textoRef)}"
+              </span>
+              <span class="regras-auto-item-meta">${escapeHtml(compLabel)}${escapeHtml(movLabel)}</span>
+              ${codigos ? `<span class="regras-auto-item-codigos">${codigos}</span>` : ""}
+            </div>
+            <div class="regras-auto-item-actions">
+              <button type="button" class="regras-auto-item-btn" data-regra-edit-id="${escapeHtml(r.id)}">Editar</button>
+              <button type="button" class="regras-auto-item-btn regras-auto-item-btn--delete" data-regra-del-id="${escapeHtml(r.id)}">Excluir</button>
+            </div>
+          </div>
+        `;
+      }).join("");
+
+      // Botões editar
+      regrasAutoList.querySelectorAll("[data-regra-edit-id]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const regra = state.regrasFlexi.find((r) => r.id === btn.dataset.regraEditId);
+          if (!regra || !regrasAutoForm) return;
+          regrasAutoForm.elements.regra_id.value = regra.id;
+          regrasAutoForm.elements.texto_referencia.value = regra.textoRef;
+          regrasAutoForm.elements.tipo_comparacao.value = regra.tipoComp;
+          regrasAutoForm.elements.tipo_movimento.value = regra.tipoMov;
+          regrasAutoForm.elements.conta_debito.value = regra.codDebito;
+          regrasAutoForm.elements.conta_credito.value = regra.codCredito;
+          regrasAutoForm.elements.codigo_historico.value = regra.codHistorico;
+          if (regrasAutoFormError) { regrasAutoFormError.textContent = ""; regrasAutoFormError.hidden = true; }
+          regrasAutoForm.hidden = false;
+          regrasAutoForm.elements.texto_referencia.focus();
+        });
+      });
+
+      // Botões excluir
+      regrasAutoList.querySelectorAll("[data-regra-del-id]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          if (!confirm(`Excluir a regra "${btn.closest("[data-regra-id]")?.querySelector(".regras-auto-item-titulo")?.textContent.trim() || ""}"?`)) return;
+          try {
+            await apiRequest(session, `/conciliador-regras/${btn.dataset.regraDelId}/`, { method: "DELETE" });
+            await loadRegrasFromAPI();
+          } catch (err) {
+            alert("Falha ao excluir a regra: " + (err.message || ""));
+          }
+        });
+      });
+    }
+
+    if (regrasAutoAddBtn) {
+      regrasAutoAddBtn.addEventListener("click", () => {
+        if (!regrasAutoForm) return;
+        regrasAutoForm.reset();
+        regrasAutoForm.elements.regra_id.value = "";
+        if (regrasAutoFormError) { regrasAutoFormError.textContent = ""; regrasAutoFormError.hidden = true; }
+        regrasAutoForm.hidden = false;
+        regrasAutoForm.elements.texto_referencia.focus();
+      });
+    }
+
+    if (regrasAutoCancel) {
+      regrasAutoCancel.addEventListener("click", () => {
+        if (regrasAutoForm) regrasAutoForm.hidden = true;
+      });
+    }
+
+    if (regrasAutoForm) {
+      regrasAutoForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const textoRef = String(regrasAutoForm.elements.texto_referencia?.value || "").trim();
+        if (!textoRef) {
+          if (regrasAutoFormError) { regrasAutoFormError.textContent = "Informe a palavra ou frase."; regrasAutoFormError.hidden = false; }
+          return;
+        }
+        const codDebito = String(regrasAutoForm.elements.conta_debito?.value || "").trim();
+        const codCredito = String(regrasAutoForm.elements.conta_credito?.value || "").trim();
+        const codHistorico = String(regrasAutoForm.elements.codigo_historico?.value || "").trim();
+        if (!codDebito && !codCredito && !codHistorico) {
+          if (regrasAutoFormError) { regrasAutoFormError.textContent = "Preencha ao menos um código (débito, crédito ou histórico)."; regrasAutoFormError.hidden = false; }
+          return;
+        }
+        if (regrasAutoFormError) { regrasAutoFormError.textContent = ""; regrasAutoFormError.hidden = true; }
+
+        const saveBtn = regrasAutoForm.querySelector("[data-regras-auto-save]");
+        if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = "Salvando..."; }
+
+        try {
+          if (!state.escritorioId) {
+            const escsData = await apiRequest(session, "/escritorios/");
+            const escs = Array.isArray(escsData) ? escsData : (escsData?.results || []);
+            if (escs.length > 0) state.escritorioId = escs[0].id;
+          }
+          if (!state.escritorioId) throw new Error("Escritório não encontrado. Recarregue a página.");
+
+          const regraId = regrasAutoForm.elements.regra_id.value;
+          const body = {
+            escritorio: state.escritorioId,
+            empresa: state.empresaId || undefined,
+            nome: textoRef.slice(0, 255),
+            texto_referencia: textoRef.slice(0, 255),
+            tipo_comparacao: regrasAutoForm.elements.tipo_comparacao.value,
+            tipo_movimento: regrasAutoForm.elements.tipo_movimento.value,
+            conta_debito: codDebito,
+            conta_credito: codCredito,
+            codigo_historico: codHistorico,
+            aplicar_automatico: true,
+          };
+
+          if (regraId) {
+            await apiRequest(session, `/conciliador-regras/${regraId}/`, { method: "PATCH", body });
+          } else {
+            await apiRequest(session, "/conciliador-regras/", { method: "POST", body });
+          }
+
+          regrasAutoForm.hidden = true;
+          regrasAutoForm.reset();
+          await loadRegrasFromAPI();
+        } catch (err) {
+          if (regrasAutoFormError) { regrasAutoFormError.textContent = err.message || "Falha ao salvar."; regrasAutoFormError.hidden = false; }
+        } finally {
+          if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = "Salvar regra"; }
+        }
+      });
+    }
 
     function renderRegraSalva(r) {
       if (!detalheRegraSalva) return;
@@ -3518,6 +3713,10 @@ function setClientFormMode(mode) {
     if (selectEmpresa) {
       selectEmpresa.addEventListener("change", () => {
         state.empresaId = selectEmpresa.value || null;
+        state.regrasFlexi = [];
+        state.regrasMap = {};
+        renderRegrasAutoList();
+        if (state.empresaId) loadRegrasFromAPI();
       });
     }
 
@@ -3543,6 +3742,8 @@ function setClientFormMode(mode) {
           if (clientes.length === 1) {
             selectEmpresa.value = clientes[0].id;
             state.empresaId = clientes[0].id;
+            renderRegrasAutoList();
+            loadRegrasFromAPI();
           }
         }
       } catch (err) {

@@ -35,6 +35,9 @@
             <select name="banco" data-extrato-banco>
               <option value="auto">Detectar automaticamente</option>
               <option value="bradesco">Bradesco Net Empresa</option>
+              <option value="amazonia">Banco da Amazônia (GESOP)</option>
+              <option value="bb">Banco do Brasil</option>
+              <option value="santander">Santander Empresas</option>
             </select>
             <span class="conciliador-control-icon">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -72,6 +75,93 @@
         </div>
       </div>
       <p class="extrato-form-error" data-extrato-error hidden></p>
+    </form>
+  </section>
+
+  <!-- ── Regras Automáticas ─────────────────────────────────────────────── -->
+  <section class="card regras-auto-card" data-regras-auto-section hidden>
+    <div class="regras-auto-header">
+      <div class="regras-auto-title-wrap">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="3"/><path d="M19.07 4.93A10 10 0 0 0 2.05 11H1v2h1.05a10 10 0 0 0 17.02 6.07"/>
+          <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
+        </svg>
+        <span>Regras Automáticas</span>
+        <span class="regras-auto-badge" data-regras-auto-count>0</span>
+      </div>
+      <button type="button" class="secondary regras-auto-add-btn" data-regras-auto-add-btn>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 5v14M5 12h14"/>
+        </svg>
+        Nova regra
+      </button>
+    </div>
+    <p class="regras-auto-desc">Aplique códigos automaticamente a todos os lançamentos que contenham determinada palavra ou frase.</p>
+
+    <!-- Lista de regras existentes -->
+    <div class="regras-auto-list" data-regras-auto-list></div>
+
+    <!-- Formulário de criação/edição (oculto por padrão) -->
+    <form class="regras-auto-form" data-regras-auto-form novalidate hidden>
+      <input type="hidden" name="regra_id" />
+      <div class="regras-auto-form-grid">
+        <label class="regras-auto-field regras-auto-field--wide">
+          <span>Palavra / frase no histórico <abbr title="Obrigatório">*</abbr></span>
+          <input type="text" name="texto_referencia" placeholder="Ex: PIX, TARIFA, TED RECEBIDA…" autocomplete="off" required />
+        </label>
+        <label class="regras-auto-field">
+          <span>Comparação</span>
+          <div class="conciliador-control">
+            <select name="tipo_comparacao">
+              <option value="CONTEM">Contém</option>
+              <option value="COMECA_COM">Começa com</option>
+              <option value="IGUAL">Igual</option>
+            </select>
+            <span class="conciliador-control-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+            </span>
+          </div>
+        </label>
+        <label class="regras-auto-field">
+          <span>Movimento</span>
+          <div class="conciliador-control">
+            <select name="tipo_movimento">
+              <option value="AMBOS">Ambos</option>
+              <option value="CREDITO">Crédito</option>
+              <option value="DEBITO">Débito</option>
+            </select>
+            <span class="conciliador-control-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+            </span>
+          </div>
+        </label>
+        <label class="regras-auto-field">
+          <span>Cód. Débito</span>
+          <input type="text" name="conta_debito" placeholder="Ex: 1.1.01" autocomplete="off" />
+        </label>
+        <label class="regras-auto-field">
+          <span>Cód. Crédito</span>
+          <input type="text" name="conta_credito" placeholder="Ex: 2.1.01" autocomplete="off" />
+        </label>
+        <label class="regras-auto-field">
+          <span>Cód. Histórico</span>
+          <input type="text" name="codigo_historico" placeholder="Ex: H001" autocomplete="off" />
+        </label>
+      </div>
+      <div class="regras-auto-form-footer">
+        <p class="regras-auto-form-error" data-regras-auto-form-error hidden></p>
+        <div class="regras-auto-form-actions">
+          <button type="button" class="secondary" data-regras-auto-cancel>Cancelar</button>
+          <button type="submit" class="primary" data-regras-auto-save>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+              <polyline points="17 21 17 13 7 13 7 21"/>
+              <polyline points="7 3 7 8 15 8"/>
+            </svg>
+            Salvar regra
+          </button>
+        </div>
+      </div>
     </form>
   </section>
 

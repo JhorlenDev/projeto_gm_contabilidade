@@ -620,7 +620,7 @@ class BradescoExtratoParser:
 def process_extrato_pdf(uploaded_file, banco: str = "auto") -> ExtratoResult:
     """
     Processa um extrato bancário em PDF.
-    Se banco='bradesco' (ou detectado automaticamente pelo conteúdo), usa o parser especializado.
+    Detecta automaticamente o banco pelo conteúdo ou usa o parser indicado.
     Lê os bytes uma única vez para evitar I/O operation on closed file.
     """
     # Ler bytes uma única vez
@@ -635,8 +635,15 @@ def process_extrato_pdf(uploaded_file, banco: str = "auto") -> ExtratoResult:
             from pypdf import PdfReader
             reader = PdfReader(io.BytesIO(raw))
             first_page = reader.pages[0].extract_text() or "" if reader.pages else ""
-            if "bradesco" in first_page.lower() or "net empresa" in first_page.lower():
+            fp_lower = first_page.lower()
+            if "bradesco" in fp_lower or "net empresa" in fp_lower:
                 banco = "bradesco"
+            elif "banco da amazônia" in fp_lower or "banco da amazonia" in fp_lower or "gesop" in fp_lower or "pd_ccor" in fp_lower or "basa" in fp_lower:
+                banco = "amazonia"
+            elif "santander" in fp_lower or "extrato consolidado inteligente" in fp_lower or "contamax" in fp_lower:
+                banco = "santander"
+            elif "banco do brasil" in fp_lower or "bb rende" in fp_lower or "bb seguro" in fp_lower or "consultas - extrato de conta corrente" in fp_lower:
+                banco = "bb"
             else:
                 banco = "generic"
         except Exception:
@@ -656,8 +663,568 @@ def process_extrato_pdf(uploaded_file, banco: str = "auto") -> ExtratoResult:
     wrapped = _BytesFile(raw)
 
     if banco == "bradesco":
-        parser = BradescoExtratoParser()
-        return parser.parse(wrapped)
+        return BradescoExtratoParser().parse(wrapped)
+    if banco == "amazonia":
+        return AmazoniaExtratoParser().parse(wrapped)
+    if banco == "bb":
+        return BancoBrasilExtratoParser().parse(wrapped)
+    if banco == "santander":
+        return SantanderExtratoParser().parse(wrapped)
 
-    parser = PDFExtratoParser()
-    return parser.parse(wrapped)
+    return PDFExtratoParser().parse(wrapped)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Parser — Banco da Amazônia (GESOP / PD_CCOR)
+# Formato: DATA | NR DOC | HISTÓRICO | VALOR LANCTO | D/C | SALDO
+# ──────────────────────────────────────────────────────────────────────────────
+
+class AmazoniaExtratoParser:
+    """
+    Extrato mensal do Banco da Amazônia — sistema GESOP.
+    Layout esperado após extração pypdf:
+      02/01/24 026577 1127 - AUTOMATIZACAO TARIFA MANUTENCAO PJ -45,00 D 40.318,30
+    Aceita anos com 2 ou 4 dígitos. Suporta extração por bloco (cada coluna em linha separada).
+    """
+
+    # Aceita DD/MM/YY e DD/MM/YYYY
+    _DATE_RE = re.compile(r"^(\d{2}/\d{2}/\d{2,4})(?:\s+(.+))?$")
+    _VALUE_RE = re.compile(r"-?[\d.]+,\d{2}")
+    # D/C pode estar no final da linha (sem trailing number)
+    _DC_RE = re.compile(r"([\d.,]+)\s+([DC])(?:\s+[\d.,]+|\s*$)")
+
+    def parse(self, uploaded_file) -> ExtratoResult:
+        try:
+            from pypdf import PdfReader
+        except ImportError:
+            return ExtratoResult(success=False, erros=["pypdf não instalado."])
+        try:
+            reader = PdfReader(io.BytesIO(_read_file_bytes(uploaded_file)))
+        except Exception as exc:
+            return ExtratoResult(success=False, erros=[f"Erro ao ler PDF: {exc}"])
+
+        pages = [p.extract_text() or "" for p in reader.pages]
+        full_text = "\n".join(pages)
+        lines = [l.strip() for l in full_text.splitlines() if l.strip()]
+
+        header = self._extract_header(full_text)
+        lancamentos = self._extract_lancamentos(lines)
+
+        return ExtratoResult(
+            success=True,
+            header=header,
+            lancamentos=lancamentos,
+            total_lancamentos=len(lancamentos),
+        )
+
+    def _extract_header(self, text: str) -> ExtratoHeader:
+        h = ExtratoHeader()
+        h.dados_brutos = {"banco": "amazonia"}
+
+        m = re.search(r"Titular\s*:\s*([\d./\-]+)\s*-\s*(.+)", text, re.IGNORECASE)
+        if m:
+            h.empresa_cnpj = m.group(1).strip()
+            h.empresa_nome = m.group(2).strip().split("\n")[0].strip()
+
+        m = re.search(r"Agência\s*:\s*(\d+)", text, re.IGNORECASE)
+        if m:
+            h.agencia = m.group(1)
+
+        m = re.search(r"Conta\s*:\s*([\d\-]+)", text, re.IGNORECASE)
+        if m:
+            h.conta = m.group(1)
+
+        # Saldo inicial
+        m = re.search(r"Saldo\s+Dispon[íi]vel\s+Inicial[:\s]*([\d.,]+)", text, re.IGNORECASE)
+        if m:
+            h.saldo = _parse_brl_decimal(m.group(1))
+
+        # Período da referência (ex: "01 / 2024")
+        m = re.search(r"(\d{2})\s*/\s*(\d{4})", text)
+        if m:
+            try:
+                h.periodo_inicio = date(int(m.group(2)), int(m.group(1)), 1)
+                import calendar
+                last_day = calendar.monthrange(int(m.group(2)), int(m.group(1)))[1]
+                h.periodo_fim = date(int(m.group(2)), int(m.group(1)), last_day)
+            except Exception:
+                pass
+
+        return h
+
+    def _extract_lancamentos(self, lines: list[str]) -> list[LancamentoExtrato]:
+        """
+        Acumula linhas por bloco de data para suportar tanto o layout em linha única
+        (todos os campos numa linha) quanto o layout multi-linha onde pypdf extrai
+        cada coluna em linhas separadas.
+        """
+        lancamentos = []
+
+        _SKIP_RE = re.compile(
+            r"^(Total\s+de|Data\s+da|Hora\s+da|Emitido|Para\s+simples|Vencto|Tipo\s+Conta"
+            r"|DATA\s+NR|Saldo\s+Dispon|PD_CCOR|GESOP)",
+            re.IGNORECASE,
+        )
+
+        # Fase 1: agrupar linhas em blocos por data
+        blocks: list[tuple[str, str, list[str]]] = []  # (date_str, first_rest, extra_lines)
+        current_date: str | None = None
+        current_first: str = ""
+        current_extra: list[str] = []
+
+        for line in lines:
+            if _SKIP_RE.search(line):
+                continue
+            m = self._DATE_RE.match(line)
+            if m:
+                if current_date is not None:
+                    blocks.append((current_date, current_first, current_extra))
+                current_date = m.group(1)
+                current_first = (m.group(2) or "").strip()
+                current_extra = []
+            elif current_date is not None:
+                current_extra.append(line)
+
+        if current_date is not None:
+            blocks.append((current_date, current_first, current_extra))
+
+        # Fase 2: extrair lançamento de cada bloco
+        line_idx = 0
+        for date_str, first_rest, extra_lines in blocks:
+            data = _parse_date_br(date_str)
+            if not data:
+                continue
+
+            # Junta toda a informação do bloco numa string só
+            full = " ".join([first_rest] + extra_lines).strip()
+            if not full:
+                continue
+
+            values = self._VALUE_RE.findall(full)
+            if not values:
+                continue
+
+            # Último = saldo; penúltimo = valor lançado
+            saldo_str = values[-1]
+            valor_str = values[-2] if len(values) >= 2 else values[-1]
+
+            saldo = _parse_brl_decimal(saldo_str)
+            valor = abs(_parse_brl_decimal(valor_str))
+
+            if valor <= 0:
+                continue
+
+            # Detecta D/C com ou sem número depois
+            dc_match = self._DC_RE.search(full)
+            if dc_match:
+                natureza = "DEBITO" if dc_match.group(2) == "D" else "CREDITO"
+            elif valor_str.startswith("-"):
+                natureza = "DEBITO"
+            else:
+                natureza = ""
+
+            # Descrição: tudo antes do primeiro valor
+            first_val_pos = full.find(values[0])
+            desc_raw = full[:first_val_pos].strip() if first_val_pos > 0 else full
+
+            # Separa nº do documento (token numérico inicial)
+            documento = ""
+            doc_m = re.match(r"^(\d{4,})\s+", desc_raw)
+            if doc_m:
+                documento = doc_m.group(1)
+                desc_raw = desc_raw[doc_m.end():].strip()
+
+            line_idx += 1
+            lancamentos.append(LancamentoExtrato(
+                linha_origem=line_idx,
+                pagina=1,
+                data=data,
+                descricao_original=desc_raw,
+                documento=documento,
+                valor=valor,
+                natureza_inferida=natureza,
+                saldo=saldo,
+                linha_original=first_rest or " ".join(extra_lines[:2]),
+            ))
+
+        lancamentos.sort(key=lambda x: (x.data or date.max, x.linha_origem))
+        return lancamentos
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Parser — Banco do Brasil
+# Formato: Dt. balancete | Dt. movimento | Ag. | Lote | Histórico | Documento | Valor C/D | Saldo
+# O valor aparece como "120,00 C" ou "520,52 D" na mesma célula
+# ──────────────────────────────────────────────────────────────────────────────
+
+class BancoBrasilExtratoParser:
+    """
+    Extrato Conta Corrente do Banco do Brasil.
+    pypdf extrai as células em linhas; cada lançamento pode ocupar 2 linhas:
+      linha 1: 02/01/2024 0000 14397 821 Pix-Recebido QR Code 4.980.512.658 120,00 C
+      linha 2: 30/12 10:53 00077668340220 Lucicleide
+    Identificamos pelo padrão: data + lote + código + histórico + doc + valor + C/D
+    """
+
+    _DATE_RE = re.compile(r"^(\d{2}/\d{2}/\d{4})\s+(\d{4})\s+(\d+)\s+(\d+)\s+(.+)$")
+    _VALUE_DC_RE = re.compile(r"([\d.]+,\d{2})\s+([CD])\s*$")
+    _VALUE_DC_INLINE = re.compile(r"([\d.]+,\d{2})\s+([CD])\b")
+
+    def parse(self, uploaded_file) -> ExtratoResult:
+        try:
+            from pypdf import PdfReader
+        except ImportError:
+            return ExtratoResult(success=False, erros=["pypdf não instalado."])
+        try:
+            reader = PdfReader(io.BytesIO(_read_file_bytes(uploaded_file)))
+        except Exception as exc:
+            return ExtratoResult(success=False, erros=[f"Erro ao ler PDF: {exc}"])
+
+        pages = [p.extract_text() or "" for p in reader.pages]
+        full_text = "\n".join(pages)
+        lines = [l.strip() for l in full_text.splitlines() if l.strip()]
+
+        header = self._extract_header(full_text)
+        lancamentos = self._extract_lancamentos(lines)
+
+        return ExtratoResult(
+            success=True,
+            header=header,
+            lancamentos=lancamentos,
+            total_lancamentos=len(lancamentos),
+        )
+
+    def _extract_header(self, text: str) -> ExtratoHeader:
+        h = ExtratoHeader()
+        h.dados_brutos = {"banco": "bb"}
+
+        m = re.search(r"Conta corrente\s+([\w\s\-]+)\n", text, re.IGNORECASE)
+        if m:
+            h.empresa_nome = m.group(1).strip()
+
+        m = re.search(r"Agência\s+([\d\-]+)", text, re.IGNORECASE)
+        if m:
+            h.agencia = m.group(1).strip()
+
+        m = re.search(r"Conta corrente\s+([\d\-]+[A-Z]?)", text, re.IGNORECASE)
+        if m:
+            h.conta = m.group(1).strip()
+
+        m = re.search(r"Per[íi]odo do extrato\s+(\d{2}\s*/\s*\d{4})", text, re.IGNORECASE)
+        if m:
+            ref = m.group(1).replace(" ", "")
+            parts = ref.split("/")
+            if len(parts) == 2:
+                try:
+                    import calendar
+                    month, year = int(parts[0]), int(parts[1])
+                    h.periodo_inicio = date(year, month, 1)
+                    h.periodo_fim = date(year, month, calendar.monthrange(year, month)[1])
+                except Exception:
+                    pass
+
+        # Saldo anterior (linha "Saldo Anterior ... 0,00 C")
+        m = re.search(r"Saldo\s+Anterior\s+([\d.,]+)\s*([CD])", text, re.IGNORECASE)
+        if m:
+            h.saldo = _parse_brl_decimal(m.group(1))
+
+        return h
+
+    def _extract_lancamentos(self, lines: list[str]) -> list[LancamentoExtrato]:
+        lancamentos = []
+        line_idx = 0
+
+        _SKIP_RE = re.compile(
+            r"^(Dt\.\s+balancete|Lançamentos|Cliente\s*-|Agência|Conta corrente|Per[íi]odo|"
+            r"Consultas\s*-|G\d{15}|Saldo\s+Anterior|S\s*A\s*L\s*D\s*O|Transação\s+efetuada"
+            r"|Serviço\s+de\s+Atendimento|Para\s+deficientes|Ouvidoria|SAC\s*[0-9])",
+            re.IGNORECASE,
+        )
+
+        # Agrupa: linha principal + possíveis linhas de complemento
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            if _SKIP_RE.search(line):
+                i += 1
+                continue
+
+            m = self._DATE_RE.match(line)
+            if not m:
+                i += 1
+                continue
+
+            date_str = m.group(1)
+            data = _parse_date_br(date_str)
+            if not data:
+                i += 1
+                continue
+
+            rest = m.group(5).strip()
+
+            # A próxima linha pode ser a continuação (hora e nome do favorecido)
+            complemento = ""
+            if i + 1 < len(lines):
+                next_line = lines[i + 1]
+                # Complemento: começa com HH/MM ou com CPF/CNPJ (só dígitos)
+                if re.match(r"^\d{2}/\d{2}\s+\d{2}:\d{2}", next_line) or re.match(r"^\d{2}/\d{2}\s+\d{2}:\d{2}", next_line):
+                    complemento = next_line
+                    i += 1
+                elif re.match(r"^\d{11,14}\s+", next_line) or re.match(r"^[A-Z]{2,}", next_line):
+                    complemento = next_line
+                    i += 1
+
+            # Extrai valor + D/C do final da linha rest
+            dc_m = self._VALUE_DC_RE.search(rest)
+            if not dc_m:
+                dc_m = self._VALUE_DC_INLINE.search(rest)
+            if not dc_m:
+                i += 1
+                continue
+
+            valor_str = dc_m.group(1)
+            dc = dc_m.group(2)
+            valor = _parse_brl_decimal(valor_str)
+            if valor <= 0:
+                i += 1
+                continue
+
+            natureza = "CREDITO" if dc == "C" else "DEBITO"
+
+            # Histórico: tudo antes do valor, remove o documento (número longo no final)
+            # Documentos do BB podem ter pontos: 4.980.512.658 → remove pontos para validar
+            before_val = rest[:dc_m.start()].strip()
+            documento = ""
+            doc_m = re.search(r"((?:\d{1,3}\.)*\d{3,}|\d{7,})\s*$", before_val)
+            if doc_m:
+                raw_doc = doc_m.group(1)
+                clean_doc = raw_doc.replace(".", "")
+                if len(clean_doc) >= 7 and clean_doc.isdigit():
+                    documento = clean_doc
+                    before_val = before_val[:doc_m.start()].strip()
+
+            # Descrição composta
+            desc = before_val
+            if complemento:
+                # Pegar apenas a parte do nome (após hora)
+                nome_m = re.search(r"\d{2}:\d{2}\s+\d+\s+(.+)", complemento)
+                if nome_m:
+                    desc = f"{desc} — {nome_m.group(1).strip()}"
+
+            line_idx += 1
+            lancamentos.append(LancamentoExtrato(
+                linha_origem=line_idx,
+                pagina=1,
+                data=data,
+                descricao_original=desc.strip(),
+                documento=documento,
+                valor=valor,
+                natureza_inferida=natureza,
+                saldo=None,
+                linha_original=line,
+            ))
+
+            i += 1
+
+        lancamentos.sort(key=lambda x: (x.data or date.max, x.linha_origem))
+        return lancamentos
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Parser — Santander (Extrato Consolidado Inteligente PJ)
+# Formato: Data | Descrição | Nº Documento | Créditos (R$) | Débitos (R$) | Saldo (R$)
+# pypdf extrai cada coluna como texto separado por espaços
+# ──────────────────────────────────────────────────────────────────────────────
+
+class SantanderExtratoParser:
+    """
+    Extrato Consolidado Inteligente do Santander Empresas.
+    O PDF tem colunas: Data | Descrição | Nº Documento | Créditos | Débitos | Saldo
+    pypdf tende a extrair a linha assim:
+      02/01 TARIFA MENSALIDADE PACOTE SERVICOS - 106,50- 0,00
+      02/01 TED RECEBIDA TRANSFERENCIA ENTRE CONTA - 2.300,00
+    Heurística: valor com "-" no final é débito; valor sem "-" é crédito.
+    """
+
+    _DATE_RE = re.compile(r"^(\d{2}/\d{2})\s+(.+)$")
+    _VALUE_RE = re.compile(r"([\d.]+,\d{2})(-?)")
+
+    def parse(self, uploaded_file) -> ExtratoResult:
+        try:
+            from pypdf import PdfReader
+        except ImportError:
+            return ExtratoResult(success=False, erros=["pypdf não instalado."])
+        try:
+            reader = PdfReader(io.BytesIO(_read_file_bytes(uploaded_file)))
+        except Exception as exc:
+            return ExtratoResult(success=False, erros=[f"Erro ao ler PDF: {exc}"])
+
+        pages = [p.extract_text() or "" for p in reader.pages]
+        full_text = "\n".join(pages)
+        lines = [l.strip() for l in full_text.splitlines() if l.strip()]
+
+        header = self._extract_header(full_text)
+        lancamentos = self._extract_lancamentos(lines, header.periodo_inicio)
+
+        return ExtratoResult(
+            success=True,
+            header=header,
+            lancamentos=lancamentos,
+            total_lancamentos=len(lancamentos),
+        )
+
+    def _extract_header(self, text: str) -> ExtratoHeader:
+        h = ExtratoHeader()
+        h.dados_brutos = {"banco": "santander"}
+
+        m = re.search(r"Nome\s*\n(.+)", text, re.IGNORECASE)
+        if m:
+            h.empresa_nome = m.group(1).strip()
+
+        m = re.search(r"Agência\s*\n?(\d+)", text, re.IGNORECASE)
+        if m:
+            h.agencia = m.group(1).strip()
+
+        m = re.search(r"Conta Corrente\s*\n?([\d.]+\-\d)", text, re.IGNORECASE)
+        if m:
+            h.conta = m.group(1).strip()
+
+        # Período pelo cabeçalho "Resumo - janeiro/2024"
+        m = re.search(r"Resumo\s*[-–]\s*(\w+)/(\d{4})", text, re.IGNORECASE)
+        if m:
+            meses = {
+                "janeiro": 1, "fevereiro": 2, "março": 3, "abril": 4,
+                "maio": 5, "junho": 6, "julho": 7, "agosto": 8,
+                "setembro": 9, "outubro": 10, "novembro": 11, "dezembro": 12,
+            }
+            mes_nome = m.group(1).lower()
+            ano = int(m.group(2))
+            mes = meses.get(mes_nome)
+            if mes:
+                import calendar
+                h.periodo_inicio = date(ano, mes, 1)
+                h.periodo_fim = date(ano, mes, calendar.monthrange(ano, mes)[1])
+
+        # Saldo em 31/xx
+        m = re.search(r"Saldo\s+de\s+Conta\s+Corrente\s+em\s+31/\d{2}\s+([\d.,]+)", text, re.IGNORECASE)
+        if m:
+            h.saldo = _parse_brl_decimal(m.group(1))
+
+        return h
+
+    def _extract_lancamentos(self, lines: list[str], ref_date: date | None) -> list[LancamentoExtrato]:
+        lancamentos = []
+        line_idx = 0
+
+        _SKIP_RE = re.compile(
+            r"^(SALDO\s+EM|Pagina:|Extrato_PJ|BALP_|Prezado|Conhe[çc]a|Fale\s+Conosco"
+            r"|Central\s+de|SAC\s*[-–]|Ouvidoria|Redes\s+Sociais|Agência|Conta\s+Corrente"
+            r"|Per[íi]odo|Resumo\s*[-–]|Nome\s*$|Data\s+Descri|Movimenta[çc][aã]o"
+            r"|Cr[eé]ditos\s+D[eé]bitos|www\.|@|http|EXTRATO|janeiro|fevereiro|mar[çc]o"
+            r"|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro"
+            r"|Saldos\s+por|D[eé]bito\s+Autom|Comprova|Transfer[êe]ncia|Cr[eé]ditos\s+Contrat"
+            r"|Pacote\s+de|Programa\s+de|[ÍI]ndices\s+Econ|Voc[êe]\s+e\s+Seu|A\s+gente\s+est)",
+            re.IGNORECASE,
+        )
+
+        # Ignora lançamentos internos do ContaMax/BB Rende (são só movimentos de investimento interno)
+        _INTERNAL_RE = re.compile(
+            r"(APLICA[CÇ][AÃ]O\s+CONTAMAX|RESGATE\s+CONTAMAX|BB\s+RENDE\s+F[AÁ]CIL)",
+            re.IGNORECASE,
+        )
+
+        year = ref_date.year if ref_date else date.today().year
+        month = ref_date.month if ref_date else date.today().month
+
+        in_movimentacao = False
+
+        for line in lines:
+            if _SKIP_RE.search(line):
+                in_movimentacao = False
+                continue
+
+            if re.search(r"Movimenta[çc][aã]o", line, re.IGNORECASE):
+                in_movimentacao = True
+                continue
+
+            if not in_movimentacao:
+                # Tenta detectar início da seção de movimentação por data DD/MM
+                if not self._DATE_RE.match(line):
+                    continue
+                in_movimentacao = True
+
+            m = self._DATE_RE.match(line)
+            if not m:
+                continue
+
+            date_str = m.group(1)
+            rest = m.group(2).strip()
+
+            # Ignora lançamentos internos ContaMax
+            if _INTERNAL_RE.search(rest):
+                continue
+
+            # Tenta parsear a data com o ano de referência
+            try:
+                day, mon = map(int, date_str.split("/"))
+                data = date(year, mon, day)
+            except Exception:
+                continue
+
+            # Extrai todos os valores da linha
+            values_raw = self._VALUE_RE.findall(rest)  # lista de (valor, sinal)
+            if not values_raw:
+                continue
+
+            # Remove valores do texto para obter descrição
+            desc_part = self._VALUE_RE.sub("", rest).strip()
+            desc_part = re.sub(r"\s{2,}", " ", desc_part).strip()
+
+            # Separar documento (número isolado) da descrição
+            documento = ""
+            doc_m = re.search(r"\b(\d{4,})\s*$", desc_part)
+            if doc_m:
+                documento = doc_m.group(1)
+                desc_part = desc_part[:doc_m.start()].strip()
+
+            # Determina natureza e valor:
+            # No Santander: valor débito vem com "-" no final (ex: "106,50-")
+            # Valor crédito vem sem sinal (ex: "2.300,00")
+            # O último valor pode ser o saldo ("0,00")
+            debito_vals = [(v, s) for v, s in values_raw if s == "-"]
+            credito_vals = [(v, s) for v, s in values_raw if s == ""]
+
+            # Remove o "0,00" final (saldo) se for o único valor "crédito"
+            saldo_val = None
+            if credito_vals and _parse_brl_decimal(credito_vals[-1][0]) == Decimal("0"):
+                saldo_val = Decimal("0")
+                credito_vals = credito_vals[:-1]
+
+            if debito_vals:
+                valor = _parse_brl_decimal(debito_vals[0][0])
+                natureza = "DEBITO"
+            elif credito_vals:
+                valor = _parse_brl_decimal(credito_vals[0][0])
+                natureza = "CREDITO"
+            else:
+                # Todos os valores são 0 ou ambíguos
+                continue
+
+            if valor <= 0:
+                continue
+
+            line_idx += 1
+            lancamentos.append(LancamentoExtrato(
+                linha_origem=line_idx,
+                pagina=1,
+                data=data,
+                descricao_original=desc_part,
+                documento=documento,
+                valor=valor,
+                natureza_inferida=natureza,
+                saldo=saldo_val,
+                linha_original=line,
+            ))
+
+        lancamentos.sort(key=lambda x: (x.data or date.max, x.linha_origem))
+        return lancamentos
