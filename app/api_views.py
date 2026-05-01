@@ -19,8 +19,9 @@ from services.conciliador import (
     process_importacao,
 )
 from services.pdf_parser import process_extrato_pdf
+from services.parsers.comprovante import parse_comprovante_pdf
 
-from .models import Cliente, Escritorio, ImportacaoExtrato, PerfilConciliacao, RegraConciliador, StatusImportacao, TransacaoImportada
+from .models import Cliente, Escritorio, ExtratoHistorico, ImportacaoExtrato, PerfilConciliacao, RegraConciliador, StatusImportacao, TransacaoImportada
 from .serializers import (
     ClienteSerializer,
     EscritorioSerializer,
@@ -330,3 +331,148 @@ class ExtratoPreviewView(APIView):
             "avisos": resultado.avisos,
             "lancamentos": lancamentos,
         })
+
+
+class ComprovantePreviw(APIView):
+    """
+    POST /api/comprovante-preview/
+    Recebe um ou mais arquivos PDF de comprovante e retorna os dados parseados.
+
+    Form fields:
+      - arquivos: um ou mais PDFs de comprovante (campo multi-arquivo)
+    """
+    authentication_classes = [KeycloakJWTAuthentication]
+    permission_classes = [HasUserGMRole]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request, *args, **kwargs):
+        arquivos = request.FILES.getlist("arquivos")
+        if not arquivos:
+            # Suporte a campo único chamado "arquivo" também
+            arq = request.FILES.get("arquivo")
+            if arq:
+                arquivos = [arq]
+        if not arquivos:
+            return Response({"detail": "Nenhum arquivo enviado."}, status=status.HTTP_400_BAD_REQUEST)
+
+        comprovantes = []
+        erros = []
+
+        for arquivo in arquivos:
+            ext = arquivo.name.rsplit(".", 1)[-1].lower() if "." in arquivo.name else ""
+            if ext != "pdf":
+                erros.append(f"{arquivo.name}: apenas PDFs são suportados.")
+                continue
+
+            resultados = parse_comprovante_pdf(arquivo)
+            for r in resultados:
+                if not r.success:
+                    erros.extend(r.erros)
+                    continue
+                comprovantes.append({
+                    "tipo": r.tipo,
+                    "documento": r.documento,
+                    "data_pagamento": r.data_pagamento.isoformat() if r.data_pagamento else None,
+                    "beneficiario": r.beneficiario,
+                    "valor_total": str(r.valor_total),
+                    "itens": [
+                        {"descricao": it.descricao, "valor": str(it.valor)}
+                        for it in r.itens
+                        if it.valor != 0
+                    ],
+                })
+
+        return Response({
+            "total": len(comprovantes),
+            "comprovantes": comprovantes,
+            "avisos": erros,
+        })
+
+
+class ExtratoHistoricoView(APIView):
+    """
+    GET  /api/extrato-historico/?empresa=<uuid>  — lista históricos da empresa
+    POST /api/extrato-historico/                  — salva novo histórico
+    DELETE /api/extrato-historico/<id>/           — remove histórico
+    """
+    authentication_classes = [KeycloakJWTAuthentication]
+    permission_classes = [HasUserGMRole]
+
+    def get(self, request):
+        empresa_id = request.query_params.get("empresa")
+        if not empresa_id:
+            return Response({"detail": "Parâmetro 'empresa' obrigatório."}, status=status.HTTP_400_BAD_REQUEST)
+
+        qs = ExtratoHistorico.objects.filter(empresa_id=empresa_id).order_by("-criado_em")
+        data = [
+            {
+                "id": str(h.id),
+                "banco": h.banco,
+                "periodo_inicio": h.periodo_inicio.isoformat() if h.periodo_inicio else None,
+                "periodo_fim": h.periodo_fim.isoformat() if h.periodo_fim else None,
+                "total_lancamentos": h.total_lancamentos,
+                "criado_em": h.criado_em.isoformat(),
+                # Não retorna 'dados' completo na listagem por performance
+            }
+            for h in qs
+        ]
+        return Response({"historicos": data, "total": len(data)})
+
+    def post(self, request):
+        empresa_id = request.data.get("empresa")
+        escritorio_id = request.data.get("escritorio")
+        if not empresa_id:
+            return Response({"detail": "Campo 'empresa' obrigatório."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Carrega escritorio automaticamente se não fornecido
+        if not escritorio_id:
+            esc = Escritorio.objects.first()
+            if not esc:
+                return Response({"detail": "Nenhum escritório cadastrado."}, status=status.HTTP_400_BAD_REQUEST)
+            escritorio_id = str(esc.id)
+
+        try:
+            empresa = Cliente.objects.get(pk=empresa_id)
+            escritorio = Escritorio.objects.get(pk=escritorio_id)
+        except (Cliente.DoesNotExist, Escritorio.DoesNotExist) as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_404_NOT_FOUND)
+
+        dados = {
+            "lancamentos": request.data.get("lancamentos", []),
+            "regras": request.data.get("regras", {}),
+            "componentes": request.data.get("componentes", {}),
+            "comprovantes": request.data.get("comprovantes", {}),
+            "extratoMeta": request.data.get("extratoMeta", {}),
+        }
+
+        from datetime import date
+        def _parse_date(v):
+            try:
+                return date.fromisoformat(v) if v else None
+            except (ValueError, TypeError):
+                return None
+
+        h = ExtratoHistorico.objects.create(
+            empresa=empresa,
+            escritorio=escritorio,
+            banco=request.data.get("banco", ""),
+            periodo_inicio=_parse_date(request.data.get("periodo_inicio")),
+            periodo_fim=_parse_date(request.data.get("periodo_fim")),
+            total_lancamentos=len(dados["lancamentos"]),
+            dados=dados,
+        )
+        return Response({
+            "id": str(h.id),
+            "criado_em": h.criado_em.isoformat(),
+            "total_lancamentos": h.total_lancamentos,
+        }, status=status.HTTP_201_CREATED)
+
+    def delete(self, request, pk=None):
+        if not pk:
+            return Response({"detail": "ID obrigatório."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            h = ExtratoHistorico.objects.get(pk=pk)
+        except ExtratoHistorico.DoesNotExist:
+            return Response({"detail": "Não encontrado."}, status=status.HTTP_404_NOT_FOUND)
+        h.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)

@@ -61,6 +61,8 @@ class ClienteSerializer(serializers.ModelSerializer):
             "cpf_cnpj_formatado",
             "ie",
             "telefone",
+            "conta_corrente",
+            "conta_contabil",
             "data_inicio",
             "situacao",
             "situacao_label",
@@ -72,6 +74,8 @@ class ClienteSerializer(serializers.ModelSerializer):
             "codigo": {"required": False, "allow_blank": True},
             "ie": {"required": False, "allow_blank": True},
             "telefone": {"required": False, "allow_blank": True},
+            "conta_corrente": {"required": False, "allow_blank": True},
+            "conta_contabil": {"required": False, "allow_blank": True},
             "data_inicio": {"required": False},
         }
 
@@ -88,6 +92,12 @@ class ClienteSerializer(serializers.ModelSerializer):
         return str(value or "").strip()
 
     def validate_telefone(self, value):
+        return str(value or "").strip()
+
+    def validate_conta_corrente(self, value):
+        return str(value or "").strip()
+
+    def validate_conta_contabil(self, value):
         return str(value or "").strip()
 
     def validate_situacao(self, value):

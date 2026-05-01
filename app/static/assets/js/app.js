@@ -978,6 +978,8 @@
       cpf_cnpj: String(record?.cpf_cnpj || "").trim(),
       ie: String(record?.ie || "").trim(),
       telefone: String(record?.telefone || "").trim(),
+      conta_corrente: String(record?.conta_corrente || "").trim(),
+      conta_contabil: String(record?.conta_contabil || "").trim(),
       data_inicio: String(record?.data_inicio || "").trim(),
       situacao,
       situacao_label: situacaoLabel,
@@ -987,6 +989,8 @@
         record?.cpf_cnpj,
         record?.ie,
         record?.telefone,
+        record?.conta_corrente,
+        record?.conta_contabil,
         record?.data_inicio,
         situacaoLabel,
         situacao,
@@ -1125,6 +1129,8 @@
       cpf_cnpj: String(data.cpf_cnpj || "").trim(),
       ie: String(data.ie || "").trim(),
       telefone: String(data.telefone || "").trim(),
+      conta_corrente: String(data.conta_corrente || "").trim(),
+      conta_contabil: String(data.conta_contabil || "").trim(),
       data_inicio: String(data.data_inicio || "").trim(),
       situacao: String(data.situacao || "ATIVO").trim() || "ATIVO",
     };
@@ -1137,6 +1143,8 @@
     if (form.elements.cpf_cnpj) form.elements.cpf_cnpj.value = client.cpf_cnpj;
     if (form.elements.ie) form.elements.ie.value = client.ie;
     if (form.elements.telefone) form.elements.telefone.value = client.telefone;
+    if (form.elements.conta_corrente) form.elements.conta_corrente.value = client.conta_corrente;
+    if (form.elements.conta_contabil) form.elements.conta_contabil.value = client.conta_contabil;
     if (form.elements.data_inicio) form.elements.data_inicio.value = client.data_inicio || getTodayDateValue();
     const situacaoValue = (record?.situacao || record?.situacao_label || "ATIVO").toUpperCase().trim().replace(" ", "_");
     if (form.elements.situacao) {
@@ -2177,13 +2185,19 @@
     }
 
     const modal = panel.querySelector("[data-client-modal]");
+    const summaryPanel = panel.querySelector("[data-clients-summary]");
     const form = panel.querySelector("[data-client-form]");
     const modalTitle = panel.querySelector("[data-client-modal-title]");
+    const eyebrow = panel.querySelector("[data-client-detail-eyebrow]");
     const submitButton = panel.querySelector("[data-client-submit]");
     const list = panel.querySelector("[data-client-list]");
     const searchInput = panel.querySelector("[data-client-search]");
     const addButtons = panel.querySelectorAll("[data-client-modal-open]");
     const closeButtons = panel.querySelectorAll("[data-client-modal-close]");
+    const tabButtons = panel.querySelectorAll("[data-client-tab]");
+    const tabPanes = panel.querySelectorAll("[data-client-tab-pane]");
+    const tabRegras = panel.querySelector("[data-client-tab-regras]");
+    const tabExtratos = panel.querySelector("[data-client-tab-extratos]");
     const emptyState = panel.querySelector("[data-client-empty]");
     const countLabel = panel.querySelector("[data-client-count]");
     const summaryTotal = panel.querySelector("[data-client-summary-total]");
@@ -2195,6 +2209,10 @@
     const historicoEmpty = panel.querySelector("[data-client-historico-empty]");
     const historicoList = panel.querySelector("[data-client-historico-list]");
     const historicoCount = panel.querySelector("[data-client-historico-count]");
+    const extratoHistoricoSection = panel.querySelector("[data-client-extrato-historico-section]");
+    const extratoHistoricoEmpty = panel.querySelector("[data-client-extrato-historico-empty]");
+    const extratoHistoricoList = panel.querySelector("[data-client-extrato-historico-list]");
+    const extratoHistoricoCount = panel.querySelector("[data-client-extrato-historico-count]");
 
     if (!modal || !form || !list) {
       return;
@@ -2228,12 +2246,27 @@ function setClientFormMode(mode) {
       }
     }
 
+    function switchTab(tabName) {
+      tabButtons.forEach((btn) => {
+        const active = btn.dataset.clientTab === tabName;
+        btn.classList.toggle("is-active", active);
+        btn.setAttribute("aria-selected", active ? "true" : "false");
+      });
+      tabPanes.forEach((pane) => {
+        pane.hidden = pane.dataset.clientTabPane !== tabName;
+        pane.classList.toggle("is-active", pane.dataset.clientTabPane === tabName);
+      });
+    }
+
     function resetModalState() {
       state.activeClientId = null;
       state.activeClientMode = "create";
       form.reset();
       if (modalTitle) {
         modalTitle.textContent = "Novo cliente";
+      }
+      if (eyebrow) {
+        eyebrow.textContent = "NOVO CLIENTE";
       }
       if (form.elements.data_inicio) {
         form.elements.data_inicio.value = getTodayDateValue();
@@ -2242,8 +2275,9 @@ function setClientFormMode(mode) {
         form.elements.situacao.value = "ATIVO";
       }
       setClientFormMode("create");
-      if (historicoSection) historicoSection.hidden = true;
       if (historicoList) historicoList.innerHTML = "";
+      if (extratoHistoricoList) extratoHistoricoList.innerHTML = "";
+      switchTab("dados");
     }
 
     function openModal(record = null, mode = "create") {
@@ -2267,29 +2301,30 @@ function setClientFormMode(mode) {
         form.elements.codigo.value = record?.codigo || "";
       }
 
-      if (modalTitle) {
-        modalTitle.textContent = mode === "view" ? "Visualizar cliente" : mode === "edit" ? "Editar cliente" : "Novo cliente";
-      }
+      const titleMap = { view: record?.nome || "Cliente", edit: record?.nome || "Editar cliente", create: "Novo cliente" };
+      const eyebrowMap = { view: "VISUALIZAR", edit: "EDITAR CLIENTE", create: "NOVO CLIENTE" };
+      if (modalTitle) modalTitle.textContent = titleMap[mode] || "Novo cliente";
+      if (eyebrow) eyebrow.textContent = eyebrowMap[mode] || "CLIENTE";
 
       setClientFormMode(mode);
 
-      // Mostra/oculta seção de histórico
-      if (historicoSection) {
-        if (mode === "view" && record?.id) {
-          historicoSection.hidden = false;
-          loadClientHistorico(record.id);
-        } else {
-          historicoSection.hidden = true;
-        }
+      // Abas de regras/extratos só visíveis no modo view
+      const showTabs = mode === "view" && !!record?.id;
+      if (tabRegras) tabRegras.hidden = !showTabs;
+      if (tabExtratos) tabExtratos.hidden = !showTabs;
+
+      // Pré-carrega dados se modo view
+      if (showTabs) {
+        loadClientHistorico(record.id);
+        loadExtratoHistorico(record.id);
       }
 
-      if (typeof modal.showModal === "function") {
-        if (!modal.open) {
-          modal.showModal();
-        }
-      } else {
-        modal.setAttribute("open", "open");
-      }
+      // Volta para a aba Dados sempre que abre
+      switchTab("dados");
+
+      // Mostra painel de detalhe, oculta summary
+      if (summaryPanel) summaryPanel.hidden = true;
+      modal.hidden = false;
 
       window.requestAnimationFrame(() => {
         const firstField = form.elements.nome || form.elements.codigo;
@@ -2348,16 +2383,82 @@ function setClientFormMode(mode) {
       }
     }
 
-    function closeModal() {
-      if (typeof modal.close === "function") {
-        if (modal.open) {
-          modal.close();
-        }
-      } else {
-        modal.removeAttribute("open");
-      }
+    async function loadExtratoHistorico(clientId) {
+      if (!extratoHistoricoList || !extratoHistoricoEmpty) return;
+      extratoHistoricoEmpty.hidden = true;
+      extratoHistoricoList.innerHTML = "<li class=\"client-extrato-hist-loading\">Carregando...</li>";
+      if (extratoHistoricoCount) extratoHistoricoCount.textContent = "";
 
+      try {
+        const data = await apiRequest(session, `/extrato-historico/?empresa=${clientId}`);
+        const historicos = data?.historicos || [];
+
+        extratoHistoricoList.innerHTML = "";
+
+        if (!historicos.length) {
+          extratoHistoricoEmpty.hidden = false;
+          return;
+        }
+
+        if (extratoHistoricoCount) {
+          extratoHistoricoCount.textContent = `${historicos.length} extrato${historicos.length > 1 ? "s" : ""}`;
+        }
+
+        extratoHistoricoList.innerHTML = historicos.map((h) => {
+          const dt = h.criado_em ? new Date(h.criado_em).toLocaleDateString("pt-BR") : "—";
+          const banco = h.banco ? escapeHtml(h.banco.charAt(0).toUpperCase() + h.banco.slice(1)) : "—";
+          const periodo = (h.periodo_inicio && h.periodo_fim)
+            ? `${formatDateBRFromISO(h.periodo_inicio)} a ${formatDateBRFromISO(h.periodo_fim)}`
+            : (h.periodo_inicio ? formatDateBRFromISO(h.periodo_inicio) : "—");
+          return `
+            <li class="client-extrato-hist-item" data-hist-id="${escapeHtml(h.id)}">
+              <div class="client-extrato-hist-head">
+                <span class="client-extrato-hist-banco">${banco}</span>
+                <span class="client-extrato-hist-data">${dt}</span>
+              </div>
+              <div class="client-extrato-hist-meta">
+                <span>${periodo}</span>
+                <span>${h.total_lancamentos} lançamento${h.total_lancamentos !== 1 ? "s" : ""}</span>
+              </div>
+              <div class="client-extrato-hist-actions">
+                <button type="button" class="regras-auto-item-btn client-extrato-hist-del" data-hist-del-id="${escapeHtml(h.id)}">Excluir</button>
+              </div>
+            </li>
+          `;
+        }).join("");
+
+        // Botões excluir
+        extratoHistoricoList.querySelectorAll("[data-hist-del-id]").forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            if (!confirm("Excluir este histórico de extrato?")) return;
+            try {
+              await apiRequest(session, `/extrato-historico/${btn.dataset.histDelId}/`, { method: "DELETE" });
+              loadExtratoHistorico(clientId);
+            } catch (err) {
+              alert("Falha ao excluir: " + (err.message || ""));
+            }
+          });
+        });
+
+      } catch (err) {
+        extratoHistoricoList.innerHTML = "";
+        extratoHistoricoEmpty.hidden = false;
+        extratoHistoricoEmpty.textContent = "Falha ao carregar histórico.";
+        logWarn("Falha ao carregar histórico de extratos.", err);
+      }
+    }
+
+    function formatDateBRFromISO(iso) {
+      if (!iso) return "—";
+      const [y, m, d] = String(iso).split("-");
+      return `${d}/${m}/${y}`;
+    }
+
+    function closeModal() {
+      modal.hidden = true;
+      if (summaryPanel) summaryPanel.hidden = false;
       resetModalState();
+      panel.querySelectorAll("[data-client-item].is-selected").forEach((el) => el.classList.remove("is-selected"));
     }
 
     function renderState() {
@@ -2447,16 +2548,13 @@ function setClientFormMode(mode) {
       button.addEventListener("click", closeModal);
     });
 
+    tabButtons.forEach((btn) => {
+      btn.addEventListener("click", () => switchTab(btn.dataset.clientTab));
+    });
+
     if (searchInput) {
       searchInput.addEventListener("input", renderState);
     }
-
-    modal.addEventListener("close", resetModalState);
-    modal.addEventListener("click", (event) => {
-      if (event.target === modal) {
-        closeModal();
-      }
-    });
 
     list.addEventListener("click", (event) => {
       const viewButton = event.target.closest("[data-client-view]");
@@ -2471,6 +2569,8 @@ function setClientFormMode(mode) {
 
         const record = state.clients.find((client) => client.id === clientItem.dataset.clientId);
         if (record) {
+          panel.querySelectorAll("[data-client-item].is-selected").forEach((el) => el.classList.remove("is-selected"));
+          clientItem.classList.add("is-selected");
           openModal(record, "view");
         }
         return;
@@ -2893,11 +2993,15 @@ function setClientFormMode(mode) {
     const fileInput = panel.querySelector("[data-extrato-file-input]");
     const fileLabel = panel.querySelector("[data-extrato-file-label]");
     const dropzone = panel.querySelector("[data-extrato-dropzone]");
+    const comprovanteInput = panel.querySelector("[data-comprovante-file-input]");
+    const comprovanteLabel = panel.querySelector("[data-comprovante-file-label]");
+    const comprovanteDropzone = panel.querySelector("[data-comprovante-dropzone]");
     const submitBtn = panel.querySelector("[data-extrato-submit]");
     const errorEl = panel.querySelector("[data-extrato-error]");
     const resultCard = panel.querySelector("[data-extrato-result]");
     const metaEl = panel.querySelector("[data-extrato-meta]");
     const criarPerfilBtn = panel.querySelector("[data-extrato-criar-perfil]");
+    const salvarHistoricoBtn = panel.querySelector("[data-extrato-salvar-historico]");
     const tbody = panel.querySelector("[data-extrato-tbody]");
     const searchInput = panel.querySelector("[data-extrato-search]");
     const filterChips = Array.from(panel.querySelectorAll("[data-extrato-natureza-filter]"));
@@ -2910,6 +3014,7 @@ function setClientFormMode(mode) {
       CREDITO: panel.querySelector("[data-extrato-count-credito]"),
       DEBITO: panel.querySelector("[data-extrato-count-debito]"),
       INDEFINIDA: panel.querySelector("[data-extrato-count-indefinido]"),
+      SEM_REGRA: panel.querySelector("[data-extrato-count-sem-regra]"),
     };
 
     if (!form || !fileInput || !tbody) return;
@@ -2926,6 +3031,8 @@ function setClientFormMode(mode) {
       escritorioId: null, // escritório principal (carregado da API)
       regrasMap: {},     // keyed por historicNormKey → { id, codDebito, codCredito, codHistorico }
       regrasFlexi: [],   // todas as regras ordenadas por prioridade (para matching CONTEM/IGUAL/COMECA_COM)
+      clientes: [],      // lista completa de clientes carregados (para validação de CNPJ)
+      comprovantes: {},  // keyed por documento (string) → ComprovanteResult da API
     };
 
     // ── Dropzone drag & drop ──────────────────────────────────────────────
@@ -2958,11 +3065,80 @@ function setClientFormMode(mode) {
       if (dropzone) dropzone.dataset.hasFile = "true";
     }
 
+    if (comprovanteDropzone && comprovanteInput) {
+      comprovanteDropzone.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        comprovanteDropzone.classList.add("is-drag-over");
+      });
+      comprovanteDropzone.addEventListener("dragleave", () => comprovanteDropzone.classList.remove("is-drag-over"));
+      comprovanteDropzone.addEventListener("drop", (e) => {
+        e.preventDefault();
+        comprovanteDropzone.classList.remove("is-drag-over");
+        const dropped = e.dataTransfer?.files;
+        if (dropped && dropped.length > 0) {
+          // Acumula com arquivos já selecionados
+          const dt = new DataTransfer();
+          for (const f of comprovanteInput.files) dt.items.add(f);
+          for (const f of dropped) {
+            if (f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf")) {
+              dt.items.add(f);
+            }
+          }
+          comprovanteInput.files = dt.files;
+          comprovanteInput.dispatchEvent(new Event("change"));
+        }
+      });
+    }
+
+    if (comprovanteInput) {
+      comprovanteInput.addEventListener("change", () => {
+        const files = comprovanteInput.files;
+        if (files && files.length > 0) {
+          if (comprovanteLabel) {
+            comprovanteLabel.textContent = files.length === 1
+              ? files[0].name
+              : `${files.length} arquivo${files.length > 1 ? "s" : ""} selecionado${files.length > 1 ? "s" : ""}`;
+          }
+          if (comprovanteDropzone) comprovanteDropzone.dataset.hasFile = "true";
+        }
+      });
+    }
+
+    // ── Upload e vinculação de comprovantes ───────────────────────────────
+    async function uploadComprovantes(files) {
+      try {
+        const fd = new FormData();
+        for (const f of files) fd.append("arquivos", f);
+        const resp = await fetch(apiUrl("/comprovante-preview/"), {
+          method: "POST",
+          headers: { Authorization: `Bearer ${session.accessToken}` },
+          body: fd,
+        });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        // Indexa por documento (normalizado: sem zeros à esquerda)
+        state.comprovantes = {};
+        (data.comprovantes || []).forEach((c) => {
+          if (c.documento) {
+            state.comprovantes[c.documento] = c;
+          }
+        });
+        // Re-renderiza tabela para mostrar indicadores de comprovante
+        renderTable();
+      } catch (_) {
+        // Silencioso — comprovantes são opcionais
+      }
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────
     function setError(msg) {
       if (!errorEl) return;
       errorEl.textContent = msg;
       errorEl.hidden = !msg;
+    }
+
+    function normalizeCnpj(value) {
+      return String(value || "").replace(/\D/g, "");
     }
 
     function formatDateBR(iso) {
@@ -2977,24 +3153,48 @@ function setClientFormMode(mode) {
     }
 
     function naturezaBadge(nat) {
-      if (nat === "CREDITO") return '<span class="extrato-nat extrato-nat--credito">Crédito</span>';
-      if (nat === "DEBITO") return '<span class="extrato-nat extrato-nat--debito">Débito</span>';
+      // Inversão contábil: crédito bancário = débito contábil, e vice-versa
+      if (nat === "CREDITO") return '<span class="extrato-nat extrato-nat--debito">Débito</span>';
+      if (nat === "DEBITO") return '<span class="extrato-nat extrato-nat--credito">Crédito</span>';
       return '<span class="extrato-nat extrato-nat--indefinido">Indefinido</span>';
+    }
+
+    function hasRegra(l) {
+      const r = state.regras[lancamentoKey(l)];
+      return r && (r.codDebito || r.codCredito || r.codHistorico);
     }
 
     function filteredRows() {
       const query = normalizeSearchTerm(state.busca);
       return state.lancamentos.filter((l) => {
-        const natMatch = state.filtroNatureza === "TODOS" || l.natureza === state.filtroNatureza;
+        const isSemRegraFilter = state.filtroNatureza === "SEM_REGRA";
+        const natMatch = state.filtroNatureza === "TODOS" || isSemRegraFilter || l.natureza === state.filtroNatureza;
+        const semRegraMatch = !isSemRegraFilter || !hasRegra(l);
         const textMatch = !query || normalizeSearchTerm(l.historico + " " + l.documento).includes(query);
-        return natMatch && textMatch;
+        return natMatch && semRegraMatch && textMatch;
       });
+    }
+
+    function regraCell(l) {
+      const r = state.regras[lancamentoKey(l)];
+      if (!r || (!r.codDebito && !r.codCredito && !r.codHistorico)) {
+        return '<td class="extrato-td-regra extrato-td-regra--vazia"><span class="extrato-regra-vazia">—</span></td>';
+      }
+      // Acha o nome da regra no regrasFlexi pelo id
+      const def = state.regrasFlexi.find((x) => x.id === r.id);
+      const nome = def?.nome ? escapeHtml(def.nome.slice(0, 40)) : "";
+      const codigos = [
+        r.codDebito ? `<span class="extrato-regra-cod extrato-regra-cod--d" title="Débito">D: ${escapeHtml(r.codDebito)}</span>` : "",
+        r.codCredito ? `<span class="extrato-regra-cod extrato-regra-cod--c" title="Crédito">C: ${escapeHtml(r.codCredito)}</span>` : "",
+        r.codHistorico ? `<span class="extrato-regra-cod extrato-regra-cod--h" title="Histórico">H: ${escapeHtml(r.codHistorico)}</span>` : "",
+      ].filter(Boolean).join("");
+      return `<td class="extrato-td-regra"><span class="extrato-regra-nome" title="${nome}">${nome}</span><span class="extrato-regra-codigos">${codigos}</span></td>`;
     }
 
     function renderTable() {
       const rows = filteredRows();
       if (!rows.length) {
-        tbody.innerHTML = '<tr data-extrato-empty><td colspan="5" class="empty-state">Nenhum lançamento encontrado para o filtro.</td></tr>';
+        tbody.innerHTML = '<tr data-extrato-empty><td colspan="6" class="empty-state">Nenhum lançamento encontrado para o filtro.</td></tr>';
         if (totalsEl) totalsEl.hidden = true;
         return;
       }
@@ -3005,13 +3205,18 @@ function setClientFormMode(mode) {
         const badge = comps.length > 0
           ? `<span class="detalhe-badge">${comps.length}</span>`
           : "";
+        const docKey = normalizeDoc(l.documento);
+        const compBadge = (docKey && state.comprovantes[docKey]?.itens?.length > 1)
+          ? `<span class="comprovante-badge" title="Comprovante vinculado">📎</span>`
+          : "";
         return `
         <tr data-extrato-row data-natureza="${escapeHtml(l.natureza)}" data-linha-key="${escapeHtml(key)}" class="extrato-row-clickable" title="Clique para detalhar">
           <td class="extrato-td-date">${escapeHtml(formatDateBR(l.data))}</td>
-          <td class="extrato-td-hist">${escapeHtml(l.historico)}${badge}</td>
+          <td class="extrato-td-hist">${escapeHtml(l.historico)}${badge}${compBadge}</td>
           <td class="extrato-td-doc">${escapeHtml(l.documento || "—")}</td>
           <td class="extrato-td-valor text-right">${escapeHtml(formatCurrency(l.valor))}</td>
           <td>${naturezaBadge(l.natureza)}</td>
+          ${regraCell(l)}
         </tr>
         `;
       }).join("");
@@ -3027,10 +3232,12 @@ function setClientFormMode(mode) {
     }
 
     function updateCounts() {
-      const counts = { TODOS: state.lancamentos.length, CREDITO: 0, DEBITO: 0, INDEFINIDA: 0 };
+      const counts = { TODOS: state.lancamentos.length, CREDITO: 0, DEBITO: 0, INDEFINIDA: 0, SEM_REGRA: 0 };
       state.lancamentos.forEach((l) => {
-        if (counts[l.natureza] !== undefined) counts[l.natureza]++;
+        if (l.natureza === "CREDITO") counts.CREDITO++;
+        else if (l.natureza === "DEBITO") counts.DEBITO++;
         else counts.INDEFINIDA++;
+        if (!hasRegra(l)) counts.SEM_REGRA++;
       });
       Object.entries(countEls).forEach(([key, el]) => {
         if (el) el.textContent = counts[key] ?? 0;
@@ -3079,11 +3286,13 @@ function setClientFormMode(mode) {
             tipoMov: r.tipo_movimento || "AMBOS",
             prioridade: r.prioridade ?? 100,
             nome: r.nome || r.texto_referencia || "",
+            empresaId: r.empresa || null,   // null = regra global
           });
         });
         // Ordena: menor prioridade = aplica primeiro
         state.regrasFlexi.sort((a, b) => a.prioridade - b.prioridade);
         applyApiRulesToLancamentos();
+        updateCounts();
         renderRegrasAutoList();
         renderTable();
       } catch (err) {
@@ -3148,6 +3357,7 @@ function setClientFormMode(mode) {
     const detalheRegraCodDebito = panel.querySelector("[data-detalhe-regra-cod-debito]");
     const detalheRegraCodCredito = panel.querySelector("[data-detalhe-regra-cod-credito]");
     const detalheRegraCodHistorico = panel.querySelector("[data-detalhe-regra-cod-historico]");
+    const detalheComprovante = panel.querySelector("[data-detalhe-comprovante-info]");
     const extrairXlsBtn = panel.querySelector("[data-extrato-extrair-xls]");
 
     // ── Regras Automáticas — refs ─────────────────────────────────────────
@@ -3155,6 +3365,8 @@ function setClientFormMode(mode) {
     const regrasAutoList = panel.querySelector("[data-regras-auto-list]");
     const regrasAutoCount = panel.querySelector("[data-regras-auto-count]");
     const regrasAutoAddBtn = panel.querySelector("[data-regras-auto-add-btn]");
+    const regrasAutoToggleBtn = panel.querySelector("[data-regras-auto-toggle]");
+    const regrasAutoCollapsible = panel.querySelector("[data-regras-auto-collapsible]");
     const regrasAutoForm = panel.querySelector("[data-regras-auto-form]");
     const regrasAutoCancel = panel.querySelector("[data-regras-auto-cancel]");
     const regrasAutoFormError = panel.querySelector("[data-regras-auto-form-error]");
@@ -3188,11 +3400,14 @@ function setClientFormMode(mode) {
         ].filter(Boolean).join(" · ");
         const compLabel = COMP_LABELS[r.tipoComp] || r.tipoComp;
         const movLabel = r.tipoMov !== "AMBOS" ? ` · ${MOV_LABELS[r.tipoMov] || r.tipoMov}` : "";
+        const globalBadge = !r.empresaId
+          ? `<span class="regra-badge-global" title="Aplica a todas as empresas">Global</span>`
+          : "";
         return `
           <div class="regras-auto-item" data-regra-id="${escapeHtml(r.id)}">
             <div class="regras-auto-item-body">
               <span class="regras-auto-item-titulo" title="${escapeHtml(r.textoRef)}">
-                "${escapeHtml(r.textoRef)}"
+                ${escapeHtml(r.nome || r.textoRef)}${globalBadge}
               </span>
               <span class="regras-auto-item-meta">${escapeHtml(compLabel)}${escapeHtml(movLabel)}</span>
               ${codigos ? `<span class="regras-auto-item-codigos">${codigos}</span>` : ""}
@@ -3217,6 +3432,10 @@ function setClientFormMode(mode) {
           regrasAutoForm.elements.conta_debito.value = regra.codDebito;
           regrasAutoForm.elements.conta_credito.value = regra.codCredito;
           regrasAutoForm.elements.codigo_historico.value = regra.codHistorico;
+          // Marca/desmarca toggle global
+          if (regrasAutoForm.elements.global_rule) {
+            regrasAutoForm.elements.global_rule.checked = !regra.empresaId;
+          }
           if (regrasAutoFormError) { regrasAutoFormError.textContent = ""; regrasAutoFormError.hidden = true; }
           regrasAutoForm.hidden = false;
           regrasAutoForm.elements.texto_referencia.focus();
@@ -3242,9 +3461,25 @@ function setClientFormMode(mode) {
         if (!regrasAutoForm) return;
         regrasAutoForm.reset();
         regrasAutoForm.elements.regra_id.value = "";
+        // Por padrão: nova regra é global
+        if (regrasAutoForm.elements.global_rule) regrasAutoForm.elements.global_rule.checked = true;
         if (regrasAutoFormError) { regrasAutoFormError.textContent = ""; regrasAutoFormError.hidden = true; }
         regrasAutoForm.hidden = false;
         regrasAutoForm.elements.texto_referencia.focus();
+      });
+    }
+
+    if (regrasAutoToggleBtn && regrasAutoCollapsible) {
+      regrasAutoToggleBtn.addEventListener("click", () => {
+        const isExpanded = regrasAutoToggleBtn.getAttribute("aria-expanded") === "true";
+        const nowExpanded = !isExpanded;
+        regrasAutoCollapsible.hidden = !nowExpanded;
+        regrasAutoToggleBtn.setAttribute("aria-expanded", String(nowExpanded));
+        const icon = regrasAutoToggleBtn.querySelector(".regras-auto-toggle-icon");
+        if (icon) icon.style.transform = nowExpanded ? "" : "rotate(180deg)";
+        regrasAutoToggleBtn.childNodes.forEach((n) => {
+          if (n.nodeType === Node.TEXT_NODE) n.textContent = nowExpanded ? " Ocultar" : " Mostrar";
+        });
       });
     }
 
@@ -3283,9 +3518,10 @@ function setClientFormMode(mode) {
           if (!state.escritorioId) throw new Error("Escritório não encontrado. Recarregue a página.");
 
           const regraId = regrasAutoForm.elements.regra_id.value;
+          const isGlobal = regrasAutoForm.elements.global_rule?.checked ?? false;
           const body = {
             escritorio: state.escritorioId,
-            empresa: state.empresaId || undefined,
+            empresa: isGlobal ? null : (state.empresaId || null),
             nome: textoRef.slice(0, 255),
             texto_referencia: textoRef.slice(0, 255),
             tipo_comparacao: regrasAutoForm.elements.tipo_comparacao.value,
@@ -3331,13 +3567,48 @@ function setClientFormMode(mode) {
       const key = lancamentoKey(l);
       state.detalheKey = key;
 
-      if (detalheHist) detalheHist.textContent = l.historico || "—";
+      if (detalheHist) detalheHist.value = l.historico || "";
       if (detalheData) detalheData.textContent = formatDateBR(l.data) || "—";
       if (detalheDoc) detalheDoc.textContent = l.documento || "—";
       if (detalheValor) detalheValor.textContent = formatCurrency(l.valor);
       if (detalheNatureza) detalheNatureza.innerHTML = naturezaBadge(l.natureza);
       if (detalheAddForm) detalheAddForm.reset();
       if (detalheAddError) { detalheAddError.textContent = ""; detalheAddError.hidden = true; }
+
+      // ── Comprovante vinculado ──────────────────────────────────────────
+      const docKey = normalizeDoc(l.documento);
+      const comp = docKey ? state.comprovantes[docKey] : null;
+
+      // Mostra bloco de info do comprovante
+      if (detalheComprovante) {
+        if (comp) {
+          const tipoLabel = {
+            bb_boleto: "BB — Boleto",
+            bb_pix: "BB — PIX",
+            bb_ted: "BB — TED / Transferência",
+            bb_convenio: "BB — Pagamento Convênio",
+            bradesco_boleto: "Bradesco — Boleto",
+            darf: "Receita Federal — DARF",
+          }[comp.tipo] || comp.tipo;
+          const dataPag = comp.data_pagamento ? formatDateBR(comp.data_pagamento) : "—";
+          const benef = comp.beneficiario ? ` · ${escapeHtml(comp.beneficiario)}` : "";
+          detalheComprovante.innerHTML =
+            `<span class="detalhe-comp-tag">📎 Comprovante</span>` +
+            `<span>${escapeHtml(tipoLabel)}${benef}</span>` +
+            `<span>Pagamento: ${escapeHtml(dataPag)}</span>`;
+          detalheComprovante.hidden = false;
+        } else {
+          detalheComprovante.hidden = true;
+          detalheComprovante.innerHTML = "";
+        }
+      }
+
+      // Auto-popula componentes do comprovante se ainda não foram adicionados (só quando há itens além do Principal)
+      if (comp && comp.itens && comp.itens.length > 1 && !state.componentes[key]) {
+        state.componentes[key] = comp.itens
+          .filter((it) => parseFloat(it.valor || 0) !== 0)
+          .map((it) => ({ descricao: it.descricao, valor: parseFloat(it.valor || 0) }));
+      }
 
       if (detalheRegrasForm) {
         const nk = historicNormKey(l.historico);
@@ -3498,6 +3769,7 @@ function setClientFormMode(mode) {
 
           const nk = historicNormKey(l.historico);
           const existing = state.regrasMap[nk];
+          const nomeEditado = String(detalheHist?.value || l.historico || "").trim().slice(0, 255) || l.historico.slice(0, 255);
           let savedRule;
 
           if (existing?.id) {
@@ -3505,6 +3777,7 @@ function setClientFormMode(mode) {
             savedRule = await apiRequest(session, `/conciliador-regras/${existing.id}/`, {
               method: "PATCH",
               body: {
+                nome: nomeEditado,
                 conta_debito: codDebito,
                 conta_credito: codCredito,
                 codigo_historico: codHistorico,
@@ -3517,7 +3790,7 @@ function setClientFormMode(mode) {
               body: {
                 escritorio: state.escritorioId,
                 empresa: state.empresaId || undefined,
-                nome: l.historico.slice(0, 255),
+                nome: nomeEditado,
                 texto_referencia: l.historico.slice(0, 255),
                 tipo_comparacao: "CONTEM",
                 conta_debito: codDebito,
@@ -3535,6 +3808,34 @@ function setClientFormMode(mode) {
               state.regras[lancamentoKey(lc)] = { ...ruleData };
             }
           });
+
+          // Atualiza regrasFlexi com o nome editado para que regraCell e renderRegrasAutoList reflitam imediatamente
+          const flexiIdx = state.regrasFlexi.findIndex((x) => x.id === savedRule.id);
+          if (flexiIdx >= 0) {
+            state.regrasFlexi[flexiIdx] = {
+              ...state.regrasFlexi[flexiIdx],
+              nome: nomeEditado,
+              codDebito,
+              codCredito,
+              codHistorico,
+            };
+          } else {
+            state.regrasFlexi.push({
+              id: savedRule.id,
+              textoRef: l.historico.slice(0, 255),
+              tipoComp: savedRule.tipo_comparacao || "CONTEM",
+              tipoMov: savedRule.tipo_movimento || "AMBOS",
+              prioridade: savedRule.prioridade ?? 100,
+              nome: nomeEditado,
+              codDebito,
+              codCredito,
+              codHistorico,
+            });
+            state.regrasFlexi.sort((a, b) => a.prioridade - b.prioridade);
+          }
+
+          updateCounts();
+          renderRegrasAutoList();
           renderTable();
           renderRegraSalva(ruleData);
 
@@ -3559,29 +3860,66 @@ function setClientFormMode(mode) {
       });
     }
 
+    // Normaliza número de documento para matching com comprovantes (remove zeros à esquerda)
+    function normalizeDoc(doc) {
+      return String(doc || "").replace(/\./g, "").replace(/,/g, "").trim().replace(/^0+/, "") || "";
+    }
+
     if (extrairXlsBtn) {
       extrairXlsBtn.addEventListener("click", () => {
         if (!window.XLSX) {
           alert("Biblioteca XLSX não carregada. Verifique sua conexão com a internet.");
           return;
         }
-        const rows = [["Data", "Conta Crédito", "Conta Débito", "Cód. Histórico", "Valor"]];
+        const rows = [["Data", "Conta Crédito", "Conta Débito", "Cód. Histórico", "Descrição", "Valor"]];
         state.lancamentos.forEach((l) => {
           const key = lancamentoKey(l);
           const r = state.regras[key] || {};
-          rows.push([
-            l.data || "",
-            r.codCredito || "",
-            r.codDebito || "",
-            r.codHistorico || "",
-            parseFloat(l.valor || 0),
-          ]);
+          const docKey = normalizeDoc(l.documento);
+          const comp = docKey ? state.comprovantes[docKey] : null;
+
+          // Se há comprovante com múltiplos itens, expande em sub-linhas
+          if (comp && comp.itens && comp.itens.length > 1) {
+            // Linha principal com valor_total do comprovante
+            rows.push([
+              l.data || "",
+              r.codCredito || "",
+              r.codDebito || "",
+              r.codHistorico || "",
+              l.historico || "",
+              parseFloat(comp.valor_total || l.valor || 0),
+            ]);
+            // Sub-linhas (apenas itens com valor != 0, excluindo "Principal" se quiser detalhar)
+            comp.itens.forEach((item) => {
+              const v = parseFloat(item.valor || 0);
+              if (v !== 0) {
+                rows.push([
+                  "",
+                  "",
+                  "",
+                  "",
+                  `  ${item.descricao}`,
+                  v,
+                ]);
+              }
+            });
+          } else {
+            // Sem comprovante ou apenas 1 item: linha simples
+            rows.push([
+              l.data || "",
+              r.codCredito || "",
+              r.codDebito || "",
+              r.codHistorico || "",
+              l.historico || "",
+              parseFloat(l.valor || 0),
+            ]);
+          }
         });
         const ws = window.XLSX.utils.aoa_to_sheet(rows);
         // Formata coluna Valor como número
         const range = window.XLSX.utils.decode_range(ws["!ref"]);
         for (let R = 1; R <= range.e.r; R++) {
-          const cell = ws[window.XLSX.utils.encode_cell({ r: R, c: 4 })];
+          const cell = ws[window.XLSX.utils.encode_cell({ r: R, c: 5 })];
           if (cell) cell.z = "#,##0.00";
         }
         const wb = window.XLSX.utils.book_new();
@@ -3627,6 +3965,66 @@ function setClientFormMode(mode) {
       });
     }
 
+    // ── Salvar histórico ──────────────────────────────────────────────────
+    if (salvarHistoricoBtn) {
+      salvarHistoricoBtn.addEventListener("click", async () => {
+        if (!state.empresaId) {
+          alert("Selecione uma empresa antes de salvar o histórico.");
+          return;
+        }
+        if (!state.lancamentos.length) {
+          alert("Nenhum lançamento para salvar.");
+          return;
+        }
+
+        salvarHistoricoBtn.disabled = true;
+        salvarHistoricoBtn.textContent = "Salvando...";
+
+        try {
+          if (!state.escritorioId) {
+            const escsData = await apiRequest(session, "/escritorios/");
+            const escs = Array.isArray(escsData) ? escsData : (escsData?.results || []);
+            if (escs.length > 0) state.escritorioId = escs[0].id;
+          }
+
+          // Serializa as regras por linha_key → {codDebito, codCredito, codHistorico}
+          const regrasSerial = {};
+          Object.entries(state.regras).forEach(([k, v]) => { regrasSerial[k] = v; });
+
+          const body = {
+            empresa: state.empresaId,
+            escritorio: state.escritorioId,
+            banco: state.extratoMeta?.banco || "",
+            periodo_inicio: state.extratoMeta
+              ? (state.lancamentos[0]?.data || null)
+              : null,
+            periodo_fim: state.extratoMeta
+              ? (state.lancamentos[state.lancamentos.length - 1]?.data || null)
+              : null,
+            lancamentos: state.lancamentos,
+            regras: regrasSerial,
+            componentes: state.componentes,
+            comprovantes: state.comprovantes,
+            extratoMeta: state.extratoMeta || {},
+          };
+
+          await apiRequest(session, "/extrato-historico/", { method: "POST", body });
+
+          salvarHistoricoBtn.textContent = "✓ Salvo!";
+          setTimeout(() => {
+            if (salvarHistoricoBtn) {
+              salvarHistoricoBtn.disabled = false;
+              salvarHistoricoBtn.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg> Salvar histórico`;
+            }
+          }, 2500);
+        } catch (err) {
+          alert("Falha ao salvar histórico: " + (err.message || ""));
+          salvarHistoricoBtn.disabled = false;
+          salvarHistoricoBtn.textContent = "Salvar histórico";
+        }
+      });
+    }
+
     // ── Submit ────────────────────────────────────────────────────────────
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
@@ -3662,7 +4060,40 @@ function setClientFormMode(mode) {
           throw new Error(payload.detail || `Erro ${resp.status}`);
         }
 
+        // ── Valida conta corrente do extrato vs empresa selecionada ──────
+        if (payload.conta) {
+          const clienteSel = state.clientes.find((c) => c.id === state.empresaId);
+          const contaEmpresa = String(clienteSel?.conta_corrente || "").replace(/\D/g, "");
+          const contaExtrato = String(payload.conta || "").replace(/\D/g, "");
+          if (contaEmpresa && contaExtrato && contaEmpresa !== contaExtrato) {
+            const ok = window.confirm(
+              `Atenção: a conta corrente do extrato (${payload.conta}) não corresponde à conta registrada para esta empresa (${clienteSel.conta_corrente}).\n\nDeseja continuar mesmo assim?`
+            );
+            if (!ok) {
+              if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = "Processar extrato"; }
+              return;
+            }
+          }
+        }
+
         state.lancamentos = payload.lancamentos || [];
+
+        // Filtra apenas lançamentos do mês do extrato: do dia 2 ao último dia do mês
+        // Usa periodo_inicio do payload para determinar o mês de referência
+        {
+          const periodoRef = payload.periodo_inicio || (state.lancamentos[0]?.data ?? null);
+          if (periodoRef) {
+            const [pA, pM] = String(periodoRef).split("-").map(Number);
+            const diaInicio = new Date(pA, pM - 1, 2);
+            const diaFim = new Date(pA, pM, 0); // último dia do mês
+            state.lancamentos = state.lancamentos.filter((l) => {
+              if (!l.data) return true;
+              const [a, m, d] = String(l.data).split("-").map(Number);
+              const dataLanc = new Date(a, m - 1, d);
+              return dataLanc >= diaInicio && dataLanc <= diaFim;
+            });
+          }
+        }
         state.regras = {};
         state.filtroNatureza = "TODOS";
         state.busca = "";
@@ -3697,6 +4128,11 @@ function setClientFormMode(mode) {
 
         if (resultCard) resultCard.hidden = false;
         resultCard?.scrollIntoView({ behavior: "smooth", block: "start" });
+
+        // ── Processa comprovantes (se houver) ──────────────────────────
+        if (comprovanteInput && comprovanteInput.files && comprovanteInput.files.length > 0) {
+          uploadComprovantes(comprovanteInput.files);
+        }
 
       } catch (err) {
         setError(err.message || "Falha ao processar o extrato.");
@@ -3735,6 +4171,7 @@ function setClientFormMode(mode) {
       try {
         const data = await apiRequest(session, "/clientes/");
         const clientes = Array.isArray(data) ? data : (data?.results || []);
+        state.clientes = clientes.map(normalizeClientRecord);
         if (selectEmpresa) {
           selectEmpresa.innerHTML = '<option value="">Selecione a empresa...</option>' +
             clientes.map((c) => `<option value="${escapeHtml(c.id)}">${escapeHtml(c.nome)}${c.cpf_cnpj ? ` (${escapeHtml(c.cpf_cnpj)})` : ""}</option>`).join("");

@@ -1,7 +1,7 @@
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
-from .api_views import ClienteViewSet, EscritorioViewSet, ExtratoPreviewView, ImportacaoExtratoViewSet, PerfilConciliacaoViewSet, RegraConciliadorViewSet, TransacaoImportadaViewSet
+from .api_views import ClienteViewSet, ComprovantePreviw, EscritorioViewSet, ExtratoHistoricoView, ExtratoPreviewView, ImportacaoExtratoViewSet, PerfilConciliacaoViewSet, RegraConciliadorViewSet, TransacaoImportadaViewSet
 from .views import TesteView
 
 
@@ -16,5 +16,8 @@ router.register(r"conciliador-perfis", PerfilConciliacaoViewSet, basename="conci
 urlpatterns = [
     path("", include(router.urls)),
     path("extrato-preview/", ExtratoPreviewView.as_view(), name="extrato-preview"),
+    path("comprovante-preview/", ComprovantePreviw.as_view(), name="comprovante-preview"),
+    path("extrato-historico/", ExtratoHistoricoView.as_view(), name="extrato-historico"),
+    path("extrato-historico/<uuid:pk>/", ExtratoHistoricoView.as_view(), name="extrato-historico-delete"),
     path("teste/", TesteView.as_view(), name="teste"),
 ]

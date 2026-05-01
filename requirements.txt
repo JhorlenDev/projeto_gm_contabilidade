@@ -13,4 +13,5 @@ PyJWT==2.12.1
 python-decouple==3.8
 requests==2.33.1
 sqlparse==0.5.5
-urllib3==2.6.3pypdf==6.10.2
+urllib3==2.6.3
+pypdf==6.10.2

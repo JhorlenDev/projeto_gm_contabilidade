@@ -11,9 +11,9 @@
   <!-- Formulário de importação -->
   <section class="card extrato-import-card">
     <form id="extrato-import-form" data-extrato-form enctype="multipart/form-data">
-      <div class="extrato-import-grid">
 
-        <!-- Seleção da empresa (cliente) -->
+      <!-- Linha 1: Empresa + Banco -->
+      <div class="extrato-import-row extrato-import-row--selects">
         <label class="extrato-field">
           <span>Empresa</span>
           <div class="conciliador-control">
@@ -28,7 +28,6 @@
           </div>
         </label>
 
-        <!-- Seleção do banco -->
         <label class="extrato-field">
           <span>Banco</span>
           <div class="conciliador-control">
@@ -46,14 +45,19 @@
             </span>
           </div>
         </label>
+      </div>
 
-        <!-- Upload do arquivo -->
+      <!-- Divisor -->
+      <div class="extrato-import-divider"></div>
+
+      <!-- Linha 2: Uploads + Botão -->
+      <div class="extrato-import-row extrato-import-row--uploads">
         <label class="extrato-field extrato-field--file">
           <span>Arquivo PDF do extrato</span>
           <div class="extrato-dropzone" data-extrato-dropzone>
             <input type="file" name="arquivo" accept=".pdf" data-extrato-file-input required />
             <div class="extrato-dropzone-inner">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
                 <polyline points="17 8 12 3 7 8"/>
                 <line x1="12" y1="3" x2="12" y2="15"/>
@@ -63,17 +67,33 @@
           </div>
         </label>
 
-        <!-- Botão -->
+        <label class="extrato-field extrato-field--file extrato-field--comprovantes">
+          <span>Comprovantes PDF <span class="extrato-field-opt">(opcional)</span></span>
+          <div class="extrato-dropzone extrato-dropzone--comprovantes" data-comprovante-dropzone>
+            <input type="file" name="comprovantes" accept=".pdf" multiple data-comprovante-file-input />
+            <div class="extrato-dropzone-inner">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <line x1="12" y1="18" x2="12" y2="12"/>
+                <line x1="9" y1="15" x2="15" y2="15"/>
+              </svg>
+              <span data-comprovante-file-label>Clique para selecionar (múltiplos PDFs)</span>
+            </div>
+          </div>
+        </label>
+
         <div class="extrato-field extrato-field--action">
           <span>&nbsp;</span>
-          <button type="submit" class="primary" data-extrato-submit>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <button type="submit" class="primary extrato-submit-btn" data-extrato-submit>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
               <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
             </svg>
             Processar extrato
           </button>
         </div>
       </div>
+
       <p class="extrato-form-error" data-extrato-error hidden></p>
     </form>
   </section>
@@ -95,10 +115,17 @@
         </svg>
         Nova regra
       </button>
+      <button type="button" class="secondary regras-auto-toggle-btn" data-regras-auto-toggle aria-expanded="true">
+        <svg class="regras-auto-toggle-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M18 15l-6-6-6 6"/>
+        </svg>
+        Ocultar
+      </button>
     </div>
     <p class="regras-auto-desc">Aplique códigos automaticamente a todos os lançamentos que contenham determinada palavra ou frase.</p>
 
     <!-- Lista de regras existentes -->
+    <div class="regras-auto-collapsible" data-regras-auto-collapsible>
     <div class="regras-auto-list" data-regras-auto-list></div>
 
     <!-- Formulário de criação/edição (oculto por padrão) -->
@@ -148,6 +175,10 @@
           <input type="text" name="codigo_historico" placeholder="Ex: H001" autocomplete="off" />
         </label>
       </div>
+      <label class="regras-auto-field regras-auto-field--global-toggle">
+        <input type="checkbox" name="global_rule" value="1" />
+        <span>Aplicar a <strong>todas as empresas</strong> (regra global)</span>
+      </label>
       <div class="regras-auto-form-footer">
         <p class="regras-auto-form-error" data-regras-auto-form-error hidden></p>
         <div class="regras-auto-form-actions">
@@ -163,6 +194,7 @@
         </div>
       </div>
     </form>
+    </div><!-- /.regras-auto-collapsible -->
   </section>
 
   <!-- Resultado da extração -->
@@ -171,12 +203,30 @@
     <!-- Info do extrato -->
     <div class="extrato-result-header" data-extrato-result-header>
       <div class="extrato-result-meta" data-extrato-meta></div>
+      <div class="extrato-result-totals-inline" data-extrato-totals hidden>
+        <div class="extrato-total-item extrato-total--debito">
+          <span>Total Débitos</span>
+          <strong data-extrato-total-credito>R$ 0,00</strong>
+        </div>
+        <div class="extrato-total-item extrato-total--credito">
+          <span>Total Créditos</span>
+          <strong data-extrato-total-debito>R$ 0,00</strong>
+        </div>
+      </div>
       <div class="extrato-result-actions">
         <button type="button" class="secondary extrato-btn-criar-perfil" data-extrato-criar-perfil>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M12 5v14M5 12h14"/>
           </svg>
           Criar Perfil
+        </button>
+        <button type="button" class="secondary extrato-btn-salvar-historico" data-extrato-salvar-historico>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+            <polyline points="17 21 17 13 7 13 7 21"/>
+            <polyline points="7 3 7 8 15 8"/>
+          </svg>
+          Salvar histórico
         </button>
         <button type="button" class="secondary extrato-btn-extrair-xls" data-extrato-extrair-xls>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -196,17 +246,21 @@
           Todos
           <span class="extrato-chip-count" data-extrato-count-todos>0</span>
         </button>
-        <button type="button" class="extrato-chip extrato-chip--credito" data-extrato-natureza-filter="CREDITO">
-          Crédito
+        <button type="button" class="extrato-chip extrato-chip--debito" data-extrato-natureza-filter="CREDITO">
+          Débito
           <span class="extrato-chip-count" data-extrato-count-credito>0</span>
         </button>
-        <button type="button" class="extrato-chip extrato-chip--debito" data-extrato-natureza-filter="DEBITO">
-          Débito
+        <button type="button" class="extrato-chip extrato-chip--credito" data-extrato-natureza-filter="DEBITO">
+          Crédito
           <span class="extrato-chip-count" data-extrato-count-debito>0</span>
         </button>
         <button type="button" class="extrato-chip extrato-chip--indefinido" data-extrato-natureza-filter="INDEFINIDA">
           Indefinido
           <span class="extrato-chip-count" data-extrato-count-indefinido>0</span>
+        </button>
+        <button type="button" class="extrato-chip extrato-chip--sem-regra" data-extrato-natureza-filter="SEM_REGRA">
+          Sem regra
+          <span class="extrato-chip-count" data-extrato-count-sem-regra>0</span>
         </button>
       </div>
 
@@ -226,30 +280,15 @@
             <th>Documento</th>
             <th class="text-right">Valor (R$)</th>
             <th>Natureza</th>
+            <th>Regra</th>
           </tr>
         </thead>
         <tbody data-extrato-tbody>
           <tr data-extrato-empty>
-            <td colspan="5" class="empty-state">Nenhum lançamento encontrado.</td>
+            <td colspan="6" class="empty-state">Nenhum lançamento encontrado.</td>
           </tr>
         </tbody>
       </table>
-    </div>
-
-    <!-- Totais -->
-    <div class="extrato-totals" data-extrato-totals hidden>
-      <div class="extrato-total-item extrato-total--credito">
-        <span>Total Créditos</span>
-        <strong data-extrato-total-credito>R$ 0,00</strong>
-      </div>
-      <div class="extrato-total-item extrato-total--debito">
-        <span>Total Débitos</span>
-        <strong data-extrato-total-debito>R$ 0,00</strong>
-      </div>
-      <div class="extrato-total-item extrato-total--saldo">
-        <span>Saldo (créditos - débitos)</span>
-        <strong data-extrato-total-saldo>R$ 0,00</strong>
-      </div>
     </div>
   </section>
 
@@ -261,7 +300,15 @@
       <div class="detalhe-dialog-head">
         <div>
           <p class="detalhe-dialog-label">Detalhar lançamento</p>
-          <h3 id="detalheDialogTitle" class="detalhe-dialog-hist" data-detalhe-hist></h3>
+          <input
+            id="detalheDialogTitle"
+            type="text"
+            class="detalhe-dialog-hist detalhe-dialog-hist--edit"
+            data-detalhe-hist
+            placeholder="Nome da regra"
+            autocomplete="off"
+            title="Edite para personalizar o nome da regra"
+          />
         </div>
         <button type="button" class="detalhe-dialog-close" data-detalhe-close aria-label="Fechar">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -300,6 +347,9 @@
           <span>Restante: <strong data-detalhe-restante></strong></span>
         </div>
       </div>
+
+      <!-- Info de comprovante vinculado (oculto por padrão) -->
+      <div class="detalhe-comprovante-info" data-detalhe-comprovante-info hidden></div>
 
       <!-- Lista de componentes -->
       <div class="detalhe-componentes-wrap">

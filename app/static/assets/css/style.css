@@ -1007,6 +1007,186 @@ body[data-page="panel"] .clients-summary .stats {
   gap: 12px;
 }
 
+/* ── Layout direito (summary + detail) ─────────────────────────────────── */
+body[data-page="panel"] .clients-right-col {
+  display: contents;
+}
+
+/* ── Painel de detalhe inline ───────────────────────────────────────────── */
+body[data-page="panel"] .client-detail-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+body[data-page="panel"] .client-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid #f0eaed;
+}
+
+body[data-page="panel"] .client-detail-head-info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+body[data-page="panel"] .client-detail-eyebrow {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+body[data-page="panel"] .client-detail-title {
+  margin: 0;
+  font-size: 1.2rem;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+
+body[data-page="panel"] .client-detail-back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+
+body[data-page="panel"] .client-detail-back-btn:hover {
+  background: #f8f4f5;
+  color: var(--text);
+  border-color: #ddd;
+}
+
+/* ── Abas ───────────────────────────────────────────────────────────────── */
+body[data-page="panel"] .client-detail-tabs {
+  display: flex;
+  gap: 0;
+  padding: 0 20px;
+  border-bottom: 1px solid #f0eaed;
+  background: #fdfbfc;
+  flex-shrink: 0;
+}
+
+body[data-page="panel"] .client-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 44px;
+  padding: 0 16px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+  white-space: nowrap;
+  margin-bottom: -1px;
+}
+
+body[data-page="panel"] .client-tab:hover {
+  color: var(--text);
+}
+
+body[data-page="panel"] .client-tab.is-active {
+  color: var(--panel);
+  border-bottom-color: var(--panel);
+}
+
+body[data-page="panel"] .client-tab svg {
+  opacity: 0.7;
+}
+
+body[data-page="panel"] .client-tab.is-active svg {
+  opacity: 1;
+}
+
+/* ── Conteúdo das abas ──────────────────────────────────────────────────── */
+body[data-page="panel"] .client-tab-pane {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+body[data-page="panel"] .client-tab-pane:not(.is-active) {
+  display: none;
+}
+
+body[data-page="panel"] .client-detail-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+body[data-page="panel"] .client-detail-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding-top: 4px;
+}
+
+body[data-page="panel"] .client-detail-form-actions button {
+  height: 44px;
+  padding: 0 18px;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+body[data-page="panel"] .client-detail-form-actions .secondary {
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--text);
+}
+
+body[data-page="panel"] .client-detail-form-actions .primary {
+  border: 1px solid var(--panel);
+  background: linear-gradient(180deg, var(--panel) 0%, var(--panel-strong) 100%);
+  color: #fff;
+}
+
+/* ── Item selecionado na lista ──────────────────────────────────────────── */
+body[data-page="panel"] [data-client-item].is-selected {
+  background: #fff4f6;
+  border-color: #f5c0cc;
+  box-shadow: 0 0 0 2px rgba(225, 38, 63, 0.12);
+}
+
+/* ── Modo view: campos readonly ─────────────────────────────────────────── */
+body[data-page="panel"] .client-detail-form[data-client-mode="view"] input,
+body[data-page="panel"] .client-detail-form[data-client-mode="view"] select {
+  background: #f8fafc;
+  color: #1f2937;
+}
+
+/* ── Estilos originais do form grid (mantidos) ──────────────────────────── */
 body[data-page="panel"] .client-modal {
   border: 0;
   padding: 0;
@@ -2603,9 +2783,55 @@ body[data-page="panel"] button.secondary:disabled {
 
 body[data-page="panel"] .extrato-import-card {
   display: grid;
-  gap: 16px;
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
 }
 
+body[data-page="panel"] .extrato-import-card form {
+  display: grid;
+  gap: 0;
+}
+
+body[data-page="panel"] .extrato-import-row {
+  display: grid;
+  gap: 14px;
+  padding: 20px 24px;
+  align-items: end;
+}
+
+body[data-page="panel"] .extrato-import-row--selects {
+  grid-template-columns: 1fr 1fr;
+  background: #fdfbfc;
+}
+
+body[data-page="panel"] .extrato-import-row--uploads {
+  grid-template-columns: 1fr 1fr auto;
+  background: #fff;
+}
+
+body[data-page="panel"] .extrato-import-divider {
+  height: 1px;
+  background: #f0eaed;
+  margin: 0 20px;
+}
+
+/* ── Botão processar ────────────────────────────────────────────────────── */
+body[data-page="panel"] .extrato-submit-btn {
+  height: 52px;
+  padding: 0 24px;
+  border-radius: 14px;
+  font-size: 0.9rem;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+  width: 100%;
+  justify-content: center;
+}
+
+/* ── Grid antigo (mantido para compatibilidade) ─────────────────────────── */
 body[data-page="panel"] .extrato-import-grid {
   display: grid;
   grid-template-columns: 220px 1fr auto;
@@ -2756,6 +2982,17 @@ body[data-page="panel"] .extrato-chip--indefinido.is-active {
   color: #374151;
 }
 
+body[data-page="panel"] .extrato-chip--sem-regra {
+  border-color: #d97706;
+  color: #92400e;
+}
+
+body[data-page="panel"] .extrato-chip--sem-regra.is-active {
+  border-color: #b45309;
+  background: #fef3c7;
+  color: #92400e;
+}
+
 body[data-page="panel"] .extrato-chip-count {
   display: inline-flex;
   align-items: center;
@@ -2852,6 +3089,60 @@ body[data-page="panel"] tr[data-natureza="DEBITO"] .extrato-td-valor {
   color: #b91c1c;
 }
 
+/* Coluna de Regra */
+body[data-page="panel"] .extrato-td-regra {
+  min-width: 160px;
+  max-width: 240px;
+  vertical-align: middle;
+}
+
+body[data-page="panel"] .extrato-td-regra--vazia .extrato-regra-vazia {
+  color: #d97706;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+body[data-page="panel"] .extrato-regra-nome {
+  display: block;
+  font-size: 0.75rem;
+  color: #374151;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+  margin-bottom: 2px;
+}
+
+body[data-page="panel"] .extrato-regra-codigos {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+body[data-page="panel"] .extrato-regra-cod {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+body[data-page="panel"] .extrato-regra-cod--d {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+body[data-page="panel"] .extrato-regra-cod--c {
+  background: #e8f5ed;
+  color: #166534;
+}
+
+body[data-page="panel"] .extrato-regra-cod--h {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
 /* Badges de natureza */
 body[data-page="panel"] .extrato-nat {
   display: inline-flex;
@@ -2880,6 +3171,27 @@ body[data-page="panel"] .extrato-nat--indefinido {
 }
 
 /* Totais */
+body[data-page="panel"] .extrato-result-totals-inline {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: stretch;
+}
+
+body[data-page="panel"] .extrato-result-totals-inline .extrato-total-item {
+  padding: 10px 16px;
+  border-radius: 12px;
+  min-width: 140px;
+}
+
+body[data-page="panel"] .extrato-result-totals-inline .extrato-total-item span {
+  font-size: 0.72rem;
+}
+
+body[data-page="panel"] .extrato-result-totals-inline .extrato-total-item strong {
+  font-size: 1.05rem;
+}
+
 body[data-page="panel"] .extrato-totals {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -2938,6 +3250,11 @@ body[data-page="panel"] .extrato-total--saldo strong {
 
 @media (max-width: 860px) {
   body[data-page="panel"] .extrato-import-grid {
+    grid-template-columns: 1fr;
+  }
+
+  body[data-page="panel"] .extrato-import-row--selects,
+  body[data-page="panel"] .extrato-import-row--uploads {
     grid-template-columns: 1fr;
   }
 
@@ -3005,6 +3322,26 @@ body[data-page="panel"] .detalhe-dialog-hist {
   color: #1e1820;
   margin: 0;
   line-height: 1.3;
+}
+
+body[data-page="panel"] .detalhe-dialog-hist--edit {
+  width: 100%;
+  border: none;
+  border-bottom: 1.5px dashed #c9b8c2;
+  border-radius: 0;
+  background: transparent;
+  padding: 4px 0;
+  outline: none;
+  font-family: inherit;
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: #1e1820;
+  line-height: 1.4;
+}
+
+body[data-page="panel"] .detalhe-dialog-hist--edit:focus {
+  border-bottom-color: #7c3f5e;
+  border-bottom-style: solid;
 }
 
 body[data-page="panel"] .detalhe-dialog-close {
@@ -3172,6 +3509,38 @@ body[data-page="panel"] .detalhe-comp-remove:hover {
   background: #fee2e2;
   color: #b91c1c;
   border-color: #fecaca;
+}
+
+/* Bloco de info de comprovante vinculado */
+body[data-page="panel"] .detalhe-comprovante-info {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  padding: 9px 14px;
+  background: #eef7f1;
+  border: 1px solid #b6dfc4;
+  border-radius: 10px;
+  font-size: 0.84rem;
+  color: #1e4a2c;
+}
+
+body[data-page="panel"] .detalhe-comp-tag {
+  font-weight: 700;
+  font-size: 0.8rem;
+  background: #2f6f44;
+  color: #fff;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+/* Badge de comprovante na tabela */
+body[data-page="panel"] .comprovante-badge {
+  margin-left: 5px;
+  font-size: 0.85rem;
+  vertical-align: middle;
+  opacity: 0.75;
+  cursor: default;
 }
 
 /* Formulário de adição */
@@ -3470,6 +3839,135 @@ body[data-page="panel"] .client-historico-item-codigos {
   font-family: monospace;
 }
 
+/* ── Histórico de Extratos (section_cliente) ───────────────────────────── */
+body[data-page="panel"] .client-extrato-historico-section {
+  margin-top: 24px;
+}
+
+body[data-page="panel"] .client-extrato-historico-section h3 {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #5a3a47;
+  margin: 0 0 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+body[data-page="panel"] .client-extrato-hist-loading {
+  font-size: 0.82rem;
+  color: #9d7b88;
+  font-style: italic;
+  list-style: none;
+  padding: 6px 0;
+}
+
+body[data-page="panel"] .client-extrato-historico-empty {
+  font-size: 0.82rem;
+  color: #9d7b88;
+  font-style: italic;
+  padding: 6px 0;
+}
+
+body[data-page="panel"] .client-extrato-historico-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+body[data-page="panel"] .client-extrato-hist-item {
+  background: #f4f8f2;
+  border: 1px solid #d3e4ce;
+  border-left: 3px solid #4a7c59;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+body[data-page="panel"] .client-extrato-hist-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+body[data-page="panel"] .client-extrato-hist-banco {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #2d5a3d;
+}
+
+body[data-page="panel"] .client-extrato-hist-data {
+  font-size: 0.75rem;
+  color: #7a9f84;
+  white-space: nowrap;
+}
+
+body[data-page="panel"] .client-extrato-hist-meta {
+  font-size: 0.78rem;
+  color: #4a7c59;
+  display: flex;
+  gap: 12px;
+}
+
+body[data-page="panel"] .client-extrato-hist-actions {
+  margin-top: 6px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+body[data-page="panel"] .client-extrato-hist-del {
+  font-size: 0.75rem;
+  color: #c0392b;
+  background: none;
+  border: 1px solid #f5c6c6;
+  border-radius: 4px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+body[data-page="panel"] .client-extrato-hist-del:hover {
+  background: #fde8e8;
+  border-color: #e74c3c;
+}
+
+/* ── Badge "Global" nas regras ─────────────────────────────────────────── */
+body[data-page="panel"] .regra-badge-global {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 600;
+  background: #e8f0fe;
+  color: #3c6bc4;
+  border: 1px solid #bdd0f5;
+  border-radius: 10px;
+  padding: 1px 7px;
+  line-height: 1.5;
+  letter-spacing: 0.01em;
+}
+
+/* ── Toggle "Regra global" no form de regras ──────────────────────────── */
+body[data-page="panel"] .regras-auto-field--global-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.83rem;
+  color: #3c6bc4;
+  cursor: pointer;
+  padding: 6px 0 2px;
+}
+
+body[data-page="panel"] .regras-auto-field--global-toggle input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  accent-color: #3c6bc4;
+  cursor: pointer;
+}
+
 /* ── Regras Automáticas (section_conciliador) ──────────────────────────── */
 body[data-page="panel"] .regras-auto-card {
   padding: 20px 24px;
@@ -3514,6 +4012,20 @@ body[data-page="panel"] .regras-auto-add-btn {
   font-size: 0.82rem;
   padding: 6px 12px;
   white-space: nowrap;
+}
+
+body[data-page="panel"] .regras-auto-toggle-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.82rem;
+  padding: 6px 10px;
+  white-space: nowrap;
+}
+
+body[data-page="panel"] .regras-auto-toggle-icon {
+  transition: transform 0.2s ease;
+  flex-shrink: 0;
 }
 
 body[data-page="panel"] .regras-auto-desc {

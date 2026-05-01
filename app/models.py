@@ -57,6 +57,8 @@ class Cliente(models.Model):
     cpf_cnpj = models.CharField(max_length=20, db_index=True)
     ie = models.CharField(max_length=32, blank=True, default="")
     telefone = models.CharField(max_length=20, blank=True, default="")
+    conta_corrente = models.CharField(max_length=30, blank=True, default="", verbose_name="Conta corrente")
+    conta_contabil = models.CharField(max_length=20, blank=True, default="", verbose_name="Conta contábil (cód. banco)")
     data_inicio = models.DateField(default=timezone.localdate)
     situacao = models.CharField(max_length=20, choices=Situacao.choices, default=Situacao.ATIVO)
     criado_em = models.DateTimeField(auto_now_add=True)
@@ -196,6 +198,29 @@ class TransacaoImportada(models.Model):
 
     def __str__(self):
         return f"{self.data_movimento} - {self.descricao_original[:40]}"
+
+
+class ExtratoHistorico(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    escritorio = models.ForeignKey(Escritorio, on_delete=models.PROTECT, related_name="extrato_historicos")
+    empresa = models.ForeignKey(Cliente, on_delete=models.PROTECT, related_name="extrato_historicos")
+    banco = models.CharField(max_length=60, blank=True, default="")
+    periodo_inicio = models.DateField(null=True, blank=True)
+    periodo_fim = models.DateField(null=True, blank=True)
+    total_lancamentos = models.PositiveIntegerField(default=0)
+    # JSON com estado completo: lancamentos, regras, componentes, comprovantes
+    dados = models.JSONField(default=dict)
+    criado_em = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-criado_em"]
+        indexes = [
+            models.Index(fields=["empresa", "criado_em"]),
+            models.Index(fields=["escritorio", "criado_em"]),
+        ]
+
+    def __str__(self):
+        return f"{self.empresa} | {self.banco} | {self.periodo_inicio}"
 
 
 class PerfilConciliacao(models.Model):
