@@ -77,6 +77,44 @@ def build_principal(claims: dict[str, Any]) -> KeycloakPrincipal:
     return KeycloakPrincipal(claims=claims, roles=roles, username=username, email=email, sub=sub)
 
 
+def exchange_code_for_token(code: str, verifier: str, redirect_uri: str) -> tuple[int, dict[str, Any]]:
+    realm_url = str(settings.KEYCLOAK_REALM_URL or "").strip().rstrip("/")
+    client_id = str(settings.KEYCLOAK_CLIENT_ID or "").strip()
+
+    if not realm_url or not client_id:
+        raise KeycloakConfigurationError("Configure KEYCLOAK_REALM_URL e KEYCLOAK_CLIENT_ID para trocar o code por token.")
+
+    token_url = f"{realm_url}/protocol/openid-connect/token"
+    try:
+        response = requests.post(
+            token_url,
+            data={
+                "grant_type": "authorization_code",
+                "client_id": client_id,
+                "code": code,
+                "redirect_uri": redirect_uri,
+                "code_verifier": verifier,
+            },
+            timeout=10,
+        )
+    except requests.RequestException as exc:
+        logger.exception("Falha ao contatar o endpoint de token do Keycloak.")
+        raise KeycloakTokenError("Falha ao contatar o Keycloak para obter o token.") from exc
+
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = {
+            "error": "invalid_response",
+            "error_description": response.text[:512] or "Resposta inválida do Keycloak.",
+        }
+
+    if not isinstance(payload, dict):
+        payload = {"error": "invalid_response", "error_description": "Resposta inválida do Keycloak."}
+
+    return response.status_code, payload
+
+
 def sync_keycloak_user(claims: dict[str, Any]):
     sub = str(claims.get("sub") or "").strip()
     if not sub:

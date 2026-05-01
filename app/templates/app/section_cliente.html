@@ -13,14 +13,45 @@
     <!-- Coluna esquerda: lista -->
     <article class="card clients-card">
       <div class="clients-toolbar">
-        <div class="search-row clients-search-row">
-          <input
-            type="search"
-            placeholder="Pesquisar cliente"
-            aria-label="Pesquisar cliente"
-            data-client-search
-          />
+        <div class="clients-toolbar-actions">
+          <div class="search-row clients-search-row">
+            <input
+              type="search"
+              placeholder="Pesquisar cliente"
+              aria-label="Pesquisar cliente"
+              data-client-search
+            />
+          </div>
+
+          <div class="clients-filter" data-client-filter>
+            <button
+              type="button"
+              class="clients-filter-button"
+              data-client-filter-toggle
+              aria-haspopup="menu"
+              aria-controls="clientFilterMenu"
+              aria-expanded="false"
+              aria-label="Filtrar clientes por status"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M4 5h16l-6 7v5l-4 2v-7L4 5Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+              </svg>
+              <span data-client-filter-label>Cadastrados</span>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="m6 9 6 6 6-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+
+            <div class="clients-filter-menu" data-client-filter-menu id="clientFilterMenu" hidden>
+              <button type="button" class="clients-filter-option is-active" data-client-filter-option="all">Cadastrados</button>
+              <button type="button" class="clients-filter-option" data-client-filter-option="ativo">Ativos</button>
+              <button type="button" class="clients-filter-option" data-client-filter-option="inativo">Inativos</button>
+              <button type="button" class="clients-filter-option" data-client-filter-option="pausado">Pausados</button>
+              <button type="button" class="clients-filter-option" data-client-filter-option="analise">Em Análise</button>
+            </div>
+          </div>
         </div>
+
         <div class="clients-count" data-client-count>0 clientes</div>
       </div>
 
@@ -31,176 +62,307 @@
       </div>
     </article>
 
-    <!-- Coluna direita: resumo ou detalhe -->
-    <div class="clients-right-col">
-
-      <!-- Painel de resumo (padrão) -->
-      <article class="card clients-summary" data-clients-summary>
-        <h2>Visão geral</h2>
-        <div class="stats clients-summary-grid">
-          <div class="stat stat-total">
-            <div class="stat-content">
-              <strong data-client-summary-total>0</strong>
-              <span class="stat-label">Cadastrados</span>
-            </div>
-            <div class="stat-icon-wrap">
-              <svg class="stat-icon" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
-                <circle cx="12" cy="8" r="4" stroke="currentColor" stroke-width="2" fill="none"/>
-                <path d="M4 20c0-4 4-6 8-6s8 2 8 6" stroke="currentColor" stroke-width="2" fill="none"/>
-              </svg>
-            </div>
+    <article class="card clients-summary" data-clients-summary>
+      <h2>Visão geral</h2>
+      <div class="stats clients-summary-grid">
+        <div class="stat stat-total">
+          <div class="stat-content">
+            <strong data-client-summary-total>0</strong>
+            <span class="stat-label">Cadastrados</span>
           </div>
-          <div class="stat stat-active">
-            <div class="stat-content">
-              <strong data-client-summary-active>0</strong>
-              <span class="stat-label">Ativos</span>
-            </div>
-            <div class="stat-icon-wrap">
-              <svg class="stat-icon" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-              </svg>
-            </div>
-          </div>
-          <div class="stat stat-review">
-            <div class="stat-content">
-              <strong data-client-summary-review>0</strong>
-              <span class="stat-label">Em análise</span>
-            </div>
-            <div class="stat-icon-wrap">
-              <svg class="stat-icon" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
-                <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2" fill="none"/>
-                <path d="M12 7v5l3 3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-              </svg>
-            </div>
-          </div>
-          <div class="stat stat-paused">
-            <div class="stat-content">
-              <strong data-client-summary-paused>0</strong>
-              <span class="stat-label">Pausados</span>
-            </div>
-            <div class="stat-icon-wrap">
-              <svg class="stat-icon" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
-                <rect x="6" y="4" width="12" height="16" rx="2" stroke="currentColor" stroke-width="2" fill="none"/>
-              </svg>
-            </div>
+          <div class="stat-icon-wrap">
+            <svg class="stat-icon" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="8" r="4" stroke="currentColor" stroke-width="2" fill="none"/>
+              <path d="M4 20c0-4 4-6 8-6s8 2 8 6" stroke="currentColor" stroke-width="2" fill="none"/>
+            </svg>
           </div>
         </div>
-      </article>
-
-      <!-- Painel de detalhe (cliente selecionado ou novo) -->
-      <article class="card client-detail-panel" data-client-modal hidden>
-
-        <!-- Cabeçalho -->
-        <div class="client-detail-head">
-          <div class="client-detail-head-info">
-            <span class="client-detail-eyebrow" data-client-detail-eyebrow>CLIENTE</span>
-            <h2 class="client-detail-title" data-client-modal-title>Novo cliente</h2>
+        <div class="stat stat-active">
+          <div class="stat-content">
+            <strong data-client-summary-active>0</strong>
+            <span class="stat-label">Ativos</span>
           </div>
-          <button class="client-detail-back-btn" type="button" data-client-modal-close aria-label="Voltar">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
-            Voltar
-          </button>
-        </div>
-
-        <!-- Abas -->
-        <div class="client-detail-tabs" role="tablist" data-client-detail-tabs>
-          <button class="client-tab is-active" role="tab" aria-selected="true" data-client-tab="dados">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
-            Dados
-          </button>
-          <button class="client-tab" role="tab" aria-selected="false" data-client-tab="regras" data-client-tab-regras>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
-            Regras
-          </button>
-          <button class="client-tab" role="tab" aria-selected="false" data-client-tab="extratos" data-client-tab-extratos>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-            Extratos
-          </button>
-        </div>
-
-        <!-- Aba: Dados -->
-        <div class="client-tab-pane is-active" data-client-tab-pane="dados">
-          <form class="client-detail-form" data-client-form>
-            <div class="client-form-grid">
-              <label>
-                <span>Código</span>
-                <input type="text" name="codigo" placeholder="Gerado automaticamente" autocomplete="off" readonly />
-              </label>
-              <label>
-                <span>Nome / Razão social</span>
-                <input type="text" name="nome" placeholder="Ex.: Alfa Contabilidade Ltda" autocomplete="off" required />
-              </label>
-              <label>
-                <span>CPF/CNPJ</span>
-                <input type="text" name="cpf_cnpj" placeholder="00.000.000/0001-00" autocomplete="off" required />
-              </label>
-              <label>
-                <span>IE</span>
-                <input type="text" name="ie" placeholder="Inscrição estadual" autocomplete="off" />
-              </label>
-              <label>
-                <span>Telefone</span>
-                <input type="text" name="telefone" placeholder="(11) 99999-9999" autocomplete="off" />
-              </label>
-              <label>
-                <span>Data de início</span>
-                <input type="date" name="data_inicio" required />
-              </label>
-              <label>
-                <span>Conta corrente</span>
-                <input type="text" name="conta_corrente" placeholder="Ex.: 12345-6" autocomplete="off" />
-              </label>
-              <label>
-                <span>Conta contábil (cód. banco)</span>
-                <input type="text" name="conta_contabil" placeholder="Ex.: 237" autocomplete="off" />
-              </label>
-              <label class="client-form-full">
-                <span>Situação</span>
-                <select name="situacao" required>
-                  <option value="ATIVO">Ativo</option>
-                  <option value="EM_ANALISE">Em análise</option>
-                  <option value="PAUSADO">Pausado</option>
-                  <option value="INATIVO">Inativo</option>
-                </select>
-              </label>
-            </div>
-
-            <div class="client-detail-form-actions">
-              <button class="secondary" type="button" data-client-modal-close>Cancelar</button>
-              <button class="primary" type="submit" data-client-submit>Salvar cliente</button>
-            </div>
-          </form>
-        </div>
-
-        <!-- Aba: Regras -->
-        <div class="client-tab-pane" data-client-tab-pane="regras" hidden>
-          <div class="client-historico-section" data-client-historico-section>
-            <div class="client-historico-header">
-              <h3>Regras de Conciliação</h3>
-              <span class="client-historico-count" data-client-historico-count></span>
-            </div>
-            <div class="client-historico-loading" data-client-historico-loading hidden>Carregando...</div>
-            <div class="client-historico-empty" data-client-historico-empty hidden>Nenhuma regra cadastrada para este cliente.</div>
-            <ul class="client-historico-list" data-client-historico-list></ul>
+          <div class="stat-icon-wrap">
+            <svg class="stat-icon" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+            </svg>
           </div>
         </div>
-
-        <!-- Aba: Extratos -->
-        <div class="client-tab-pane" data-client-tab-pane="extratos" hidden>
-          <div class="client-extrato-historico-section" data-client-extrato-historico-section>
-            <div class="client-historico-header">
-              <h3>Histórico de Extratos</h3>
-              <span class="client-historico-count" data-client-extrato-historico-count></span>
-            </div>
-            <div class="client-extrato-historico-empty" data-client-extrato-historico-empty hidden>
-              Nenhum extrato salvo para este cliente.
-            </div>
-            <ul class="client-extrato-historico-list" data-client-extrato-historico-list></ul>
+        <div class="stat stat-review">
+          <div class="stat-content">
+            <strong data-client-summary-review>0</strong>
+            <span class="stat-label">Em análise</span>
+          </div>
+          <div class="stat-icon-wrap">
+            <svg class="stat-icon" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2" fill="none"/>
+              <path d="M12 7v5l3 3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
           </div>
         </div>
-
-      </article>
-    </div><!-- /.clients-right-col -->
-
+        <div class="stat stat-paused">
+          <div class="stat-content">
+            <strong data-client-summary-paused>0</strong>
+            <span class="stat-label">Pausados</span>
+          </div>
+          <div class="stat-icon-wrap">
+            <svg class="stat-icon" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="6" y="4" width="12" height="16" rx="2" stroke="currentColor" stroke-width="2" fill="none"/>
+            </svg>
+          </div>
+        </div>
+      </div>
+    </article>
   </section>
+
+  <dialog class="client-modal" data-client-modal>
+    <div class="client-modal-card" data-client-modal-card data-client-mode="create">
+      <div class="client-modal-head">
+        <div class="client-modal-copy">
+          <span class="client-modal-eyebrow">Cadastro de cliente</span>
+          <h2 data-client-modal-title>Novo cliente</h2>
+          <p class="client-modal-description" data-client-modal-description>
+            Mantenha os dados principais do cliente organizados.
+          </p>
+        </div>
+        <div class="client-modal-head-actions">
+          <div class="client-modal-mode" aria-live="polite">
+            <span>Modo atual</span>
+            <strong data-client-modal-mode-label>Criação</strong>
+          </div>
+          <span class="client-related-badge client-modal-status-badge" data-client-modal-status hidden>Ativo</span>
+          <div class="client-modal-quick-actions" data-client-modal-quick-actions hidden>
+            <button class="secondary" type="button" data-client-modal-quick-edit>Editar</button>
+            <button class="secondary" type="button" data-client-modal-quick-toggle>Desativar</button>
+          </div>
+          <button class="client-icon-button" type="button" data-client-modal-close aria-label="Fechar modal">×</button>
+        </div>
+      </div>
+
+      <section class="client-basic-summary client-related-card" data-client-basic-summary hidden>
+        <div class="client-related-head">
+          <div>
+            <span>Dados básicos</span>
+            <h3>Informações não editáveis</h3>
+          </div>
+        </div>
+
+        <div class="client-basic-grid">
+          <div class="client-basic-item">
+            <span>CPF/CNPJ</span>
+            <strong data-client-basic-document>—</strong>
+          </div>
+          <div class="client-basic-item">
+            <span>Email</span>
+            <strong data-client-basic-email>—</strong>
+          </div>
+          <div class="client-basic-item">
+            <span>Telefone</span>
+            <strong data-client-basic-phone>—</strong>
+          </div>
+          <div class="client-basic-item">
+            <span>Data de início</span>
+            <strong data-client-basic-start>—</strong>
+          </div>
+        </div>
+      </section>
+
+      <form class="client-form-panel" data-client-form>
+        <div class="client-form-grid">
+          <label>
+            <span>Código</span>
+            <input type="text" name="codigo" placeholder="Gerado automaticamente" autocomplete="off" readonly />
+          </label>
+          <label>
+            <span>Nome / Razão social</span>
+            <input type="text" name="nome" placeholder="Ex.: Alfa Contabilidade Ltda" autocomplete="off" required />
+          </label>
+          <label>
+            <span>CPF/CNPJ</span>
+            <input type="text" name="cpf_cnpj" placeholder="00.000.000/0001-00" autocomplete="off" required />
+          </label>
+          <label>
+            <span>Email</span>
+            <input type="email" name="email" placeholder="cliente@empresa.com.br" autocomplete="off" />
+          </label>
+          <label>
+            <span>IE</span>
+            <input type="text" name="ie" placeholder="Inscrição estadual" autocomplete="off" />
+          </label>
+          <label>
+            <span>Telefone</span>
+            <input type="text" name="telefone" placeholder="(11) 99999-9999" autocomplete="off" />
+          </label>
+          <label>
+            <span>Data de início</span>
+            <input type="date" name="data_inicio" required />
+          </label>
+          <label class="client-form-full">
+            <span>Situação</span>
+            <select name="situacao" required>
+              <option value="ATIVO">Ativo</option>
+              <option value="EM_ANALISE">Em análise</option>
+              <option value="PAUSADO">Pausado</option>
+              <option value="INATIVO">Inativo</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="modal-actions">
+          <button class="secondary" type="button" data-client-modal-close>Cancelar</button>
+          <button class="primary" type="submit" data-client-submit>Salvar cliente</button>
+        </div>
+      </form>
+
+      <section class="client-related-grid" aria-label="Relacionamentos do cliente">
+        <article class="client-related-card client-accounts-card">
+          <div class="client-related-head">
+            <div>
+              <span>Bancos e contas</span>
+              <h3>Vínculos bancários e contábeis</h3>
+            </div>
+            <button class="secondary client-related-button" type="button" data-client-account-new>Adicionar conta</button>
+          </div>
+
+          <p class="client-related-note" data-client-account-hint>Salve o cliente para começar a vincular contas.</p>
+
+          <div class="client-account-layout">
+            <div class="client-account-list-wrap">
+              <div class="client-related-empty" data-client-account-empty hidden>Ainda não há contas vinculadas a este cliente.</div>
+              <div class="client-account-list" data-client-account-list></div>
+            </div>
+
+            <form class="client-account-form" data-client-account-form hidden>
+              <input type="hidden" name="id" />
+              <input type="hidden" name="cliente" />
+              <div class="client-account-form-head">
+                <strong data-client-account-form-title>Nova conta</strong>
+                <span data-client-account-form-subtitle>Configure contas bancárias ou contábeis vinculadas a este cliente.</span>
+              </div>
+
+              <div class="client-account-form-grid">
+                <label>
+                  <span>Tipo</span>
+                  <select name="tipo" required>
+                    <option value="BANCARIA">Conta bancária</option>
+                    <option value="CONTABIL">Conta contábil</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Apelido</span>
+                  <input type="text" name="apelido" placeholder="Conta principal" autocomplete="off" />
+                </label>
+
+                <div class="client-account-section" data-account-fields="bancaria">
+                  <label class="client-account-full">
+                    <span>Banco</span>
+                    <select data-client-account-bank-select required>
+                      <option value="">Selecione o banco</option>
+                      <option value="Banco do Brasil">Banco do Brasil</option>
+                      <option value="Bradesco">Bradesco</option>
+                      <option value="Caixa">Caixa</option>
+                      <option value="Santander">Santander</option>
+                      <option value="Itaú">Itaú</option>
+                      <option value="Banco Inter">Banco Inter</option>
+                      <option value="Nubank">Nubank</option>
+                      <option value="Sicredi">Sicredi</option>
+                      <option value="Sicoob">Sicoob</option>
+                      <option value="BTG Pactual">BTG Pactual</option>
+                      <option value="Safra">Safra</option>
+                      <option value="Banrisul">Banrisul</option>
+                      <option value="C6 Bank">C6 Bank</option>
+                      <option value="Banco Original">Banco Original</option>
+                      <option value="Banco do Nordeste">Banco do Nordeste</option>
+                      <option value="Mercantil do Brasil">Mercantil do Brasil</option>
+                      <option value="Daycoval">Daycoval</option>
+                      <option value="Banco PAN">Banco PAN</option>
+                      <option value="BV">BV</option>
+                      <option value="OUTRO">Outro</option>
+                    </select>
+                  </label>
+
+                  <label class="client-account-full" data-client-account-bank-other-wrap hidden>
+                    <span>Digite o banco</span>
+                    <input type="text" name="banco" placeholder="Informe o nome do banco" autocomplete="off" />
+                  </label>
+
+                  <label>
+                    <span>Agência</span>
+                    <input type="text" name="agencia" placeholder="0001" autocomplete="off" />
+                  </label>
+                  <label>
+                    <span>Número</span>
+                    <input type="text" name="numero" placeholder="12345-6" autocomplete="off" />
+                  </label>
+                </div>
+
+                <div class="client-account-section" data-account-fields="contabil">
+                  <label class="client-account-full">
+                    <span>Código contábil</span>
+                    <input type="text" name="codigo_contabil" placeholder="1.1.01.001" autocomplete="off" />
+                  </label>
+                  <label class="client-account-full">
+                    <span>Descrição contábil</span>
+                    <input type="text" name="descricao_contabil" placeholder="Conta caixa principal" autocomplete="off" />
+                  </label>
+                </div>
+
+                <label class="client-account-full">
+                  <span>Observações</span>
+                  <textarea name="observacoes" rows="3" placeholder="Informações internas, se necessário"></textarea>
+                </label>
+              </div>
+
+              <div class="modal-actions client-account-actions">
+                <button class="secondary" type="button" data-client-account-cancel>Cancelar</button>
+                <button class="primary" type="submit" data-client-account-submit>Salvar conta</button>
+              </div>
+            </form>
+          </div>
+        </article>
+
+        <article class="client-related-card client-certificate-card">
+            <div class="client-related-head">
+              <div>
+                <span>Certificado digital</span>
+                <h3>Armazenamento privado e criptografado</h3>
+              </div>
+              <span class="client-related-badge" data-client-certificate-status>Sem certificado</span>
+            </div>
+
+          <p class="client-related-note">
+            Anexe arquivos <strong>.pfx</strong> ou <strong>.p12</strong>. O conteúdo fica criptografado em armazenamento privado.
+          </p>
+
+          <div class="client-certificate-box">
+            <div class="client-certificate-meta" data-client-certificate-meta>
+              <strong>Nenhum certificado enviado</strong>
+              <span>Este cliente ainda não possui certificado digital.</span>
+            </div>
+
+            <label class="client-certificate-file">
+              <input type="file" accept=".pfx,.p12" data-client-certificate-file />
+              <span>Selecionar arquivo</span>
+            </label>
+
+            <div class="client-certificate-actions">
+              <button class="secondary" type="button" data-client-certificate-clear>Limpar seleção</button>
+              <button class="primary" type="button" data-client-certificate-submit>Salvar certificado</button>
+              <button class="secondary" type="button" data-client-certificate-delete hidden>Excluir certificado</button>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <div class="client-historico-section" data-client-historico-section hidden>
+        <div class="client-historico-header">
+          <h3>Histórico de regras</h3>
+          <span class="client-historico-count" data-client-historico-count></span>
+        </div>
+        <div class="client-historico-loading" data-client-historico-loading hidden>Carregando...</div>
+        <div class="client-historico-empty" data-client-historico-empty hidden>Ainda não há regras vinculadas a este cliente.</div>
+        <ul class="client-historico-list" data-client-historico-list></ul>
+      </div>
+    </div>
+  </dialog>
 </section>

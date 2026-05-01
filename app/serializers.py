@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 from decimal import Decimal
 from pathlib import Path
 
 from django.utils import timezone
 from rest_framework import serializers
 
-from .models import Cliente, Escritorio, ImportacaoExtrato, PerfilConciliacao, RegraConciliador, TransacaoImportada, TipoArquivo, TipoComparacao, TipoMovimento
+from .models import Cliente, ContaCliente, CertificadoDigitalCliente, Escritorio, ImportacaoExtrato, PerfilConciliacao, RegraConciliador, TransacaoImportada, TipoArquivo, TipoComparacao, TipoContaCliente, TipoMovimento
 
 
 def _normalize_situacao(value: str) -> str:
@@ -41,6 +42,12 @@ def _strip_text(value) -> str:
     return str(value or "").strip()
 
 
+def _field_value(attrs, instance, field_name: str) -> str:
+    if field_name in attrs:
+        return _strip_text(attrs.get(field_name))
+    return _strip_text(getattr(instance, field_name, "") if instance is not None else "")
+
+
 def _format_currency(value) -> str:
     amount = Decimal(str(value or 0)).quantize(Decimal("0.01"))
     formatted = f"{amount:,.2f}"
@@ -59,6 +66,7 @@ class ClienteSerializer(serializers.ModelSerializer):
             "nome",
             "cpf_cnpj",
             "cpf_cnpj_formatado",
+            "email",
             "ie",
             "telefone",
             "conta_corrente",
@@ -73,6 +81,7 @@ class ClienteSerializer(serializers.ModelSerializer):
         extra_kwargs = {
             "codigo": {"required": False, "allow_blank": True},
             "ie": {"required": False, "allow_blank": True},
+            "email": {"required": False, "allow_blank": True},
             "telefone": {"required": False, "allow_blank": True},
             "conta_corrente": {"required": False, "allow_blank": True},
             "conta_contabil": {"required": False, "allow_blank": True},
@@ -86,6 +95,9 @@ class ClienteSerializer(serializers.ModelSerializer):
         return str(value or "").strip()
 
     def validate_cpf_cnpj(self, value):
+        return str(value or "").strip()
+
+    def validate_email(self, value):
         return str(value or "").strip()
 
     def validate_ie(self, value):
@@ -117,6 +129,220 @@ class ClienteSerializer(serializers.ModelSerializer):
         if not attrs.get("data_inicio"):
             attrs["data_inicio"] = timezone.localdate()
         return attrs
+
+
+class ContaClienteSerializer(serializers.ModelSerializer):
+    cliente_nome = serializers.CharField(source="cliente.nome", read_only=True)
+    tipo_label = serializers.CharField(source="get_tipo_display", read_only=True)
+    resumo = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ContaCliente
+        fields = [
+            "id",
+            "cliente",
+            "cliente_nome",
+            "tipo",
+            "tipo_label",
+            "apelido",
+            "banco",
+            "agencia",
+            "numero",
+            "codigo_contabil",
+            "descricao_contabil",
+            "observacoes",
+            "ativo",
+            "resumo",
+            "criado_em",
+            "atualizado_em",
+        ]
+        read_only_fields = ["id", "cliente_nome", "tipo_label", "resumo", "criado_em", "atualizado_em"]
+        extra_kwargs = {
+            "cliente": {"required": False},
+            "apelido": {"required": False, "allow_blank": True},
+            "banco": {"required": False, "allow_blank": True},
+            "agencia": {"required": False, "allow_blank": True},
+            "numero": {"required": False, "allow_blank": True},
+            "codigo_contabil": {"required": False, "allow_blank": True},
+            "descricao_contabil": {"required": False, "allow_blank": True},
+            "observacoes": {"required": False, "allow_blank": True},
+        }
+
+    def validate_tipo(self, value):
+        return value or TipoContaCliente.BANCARIA
+
+    def validate_apelido(self, value):
+        return _strip_text(value)
+
+    def validate_banco(self, value):
+        return _strip_text(value)
+
+    def validate_agencia(self, value):
+        return _strip_text(value)
+
+    def validate_numero(self, value):
+        return _strip_text(value)
+
+    def validate_codigo_contabil(self, value):
+        return _strip_text(value)
+
+    def validate_descricao_contabil(self, value):
+        return _strip_text(value)
+
+    def validate_observacoes(self, value):
+        return _strip_text(value)
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        instance = getattr(self, "instance", None)
+        tipo = _field_value(attrs, instance, "tipo") or TipoContaCliente.BANCARIA
+        banco = _field_value(attrs, instance, "banco")
+        agencia = _field_value(attrs, instance, "agencia")
+        numero = _field_value(attrs, instance, "numero")
+        codigo_contabil = _field_value(attrs, instance, "codigo_contabil")
+
+        errors = {}
+
+        if tipo == TipoContaCliente.BANCARIA:
+            if not banco:
+                errors["banco"] = "Informe o banco."
+            if not agencia:
+                errors["agencia"] = "Informe a agência."
+            if not numero:
+                errors["numero"] = "Informe o número da conta."
+        elif tipo == TipoContaCliente.CONTABIL:
+            if not codigo_contabil:
+                errors["codigo_contabil"] = "Informe o código contábil."
+        else:
+            errors["tipo"] = "Tipo de conta inválido."
+
+        if errors:
+            raise serializers.ValidationError(errors)
+
+        return attrs
+
+    def get_resumo(self, obj):
+        return obj.resumo()
+
+
+class CertificadoDigitalClienteSerializer(serializers.ModelSerializer):
+    cliente_nome = serializers.CharField(source="cliente.nome", read_only=True)
+    tipo_arquivo_label = serializers.CharField(source="get_tipo_arquivo_display", read_only=True)
+    tamanho_formatado = serializers.SerializerMethodField()
+    resumo = serializers.SerializerMethodField()
+    arquivo = serializers.FileField(write_only=True, required=False)
+
+    class Meta:
+        model = CertificadoDigitalCliente
+        fields = [
+            "id",
+            "cliente",
+            "cliente_nome",
+            "arquivo",
+            "arquivo_original",
+            "tipo_arquivo",
+            "tipo_arquivo_label",
+            "tamanho_bytes",
+            "tamanho_formatado",
+            "hash_sha256",
+            "ativo",
+            "resumo",
+            "criado_em",
+            "atualizado_em",
+        ]
+        read_only_fields = [
+            "id",
+            "cliente_nome",
+            "arquivo_original",
+            "tipo_arquivo",
+            "tipo_arquivo_label",
+            "tamanho_bytes",
+            "tamanho_formatado",
+            "hash_sha256",
+            "resumo",
+            "criado_em",
+            "atualizado_em",
+        ]
+        extra_kwargs = {
+            "cliente": {"required": False},
+            "ativo": {"required": False},
+        }
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        instance = getattr(self, "instance", None)
+        arquivo = attrs.get("arquivo")
+        cliente = attrs.get("cliente", getattr(instance, "cliente", None))
+
+        if not cliente:
+            raise serializers.ValidationError({"cliente": "Informe o cliente."})
+
+        if instance is None and arquivo is None:
+            raise serializers.ValidationError({"arquivo": "Envie um certificado digital."})
+
+        return attrs
+
+    def validate_arquivo(self, value):
+        original_name = Path(getattr(value, "name", "certificado")).name
+        suffix = Path(original_name).suffix.lower()
+        if suffix not in {".pfx", ".p12"}:
+            raise serializers.ValidationError("Use arquivos .pfx ou .p12.")
+
+        data = value.read()
+        value.seek(0)
+
+        self._arquivo_original = original_name
+        self._arquivo_tipo = "PFX" if suffix == ".pfx" else "P12"
+        self._arquivo_tamanho = len(data)
+        self._arquivo_hash = hashlib.sha256(data).hexdigest()
+        return value
+
+    def _apply_uploaded_file(self, instance, arquivo):
+        if arquivo is None:
+            return None
+
+        old_name = instance.arquivo.name if instance and instance.pk and instance.arquivo else None
+        instance.arquivo = arquivo
+        instance.arquivo_original = getattr(self, "_arquivo_original", Path(getattr(arquivo, "name", "certificado")).name)
+        instance.tipo_arquivo = getattr(self, "_arquivo_tipo", "PFX")
+        instance.tamanho_bytes = getattr(self, "_arquivo_tamanho", getattr(arquivo, "size", 0) or 0)
+        instance.hash_sha256 = getattr(self, "_arquivo_hash", "")
+        return old_name
+
+    def create(self, validated_data):
+        arquivo = validated_data.pop("arquivo", None)
+        instance = CertificadoDigitalCliente(**validated_data)
+        old_name = self._apply_uploaded_file(instance, arquivo)
+        instance.save()
+
+        if old_name and old_name != instance.arquivo.name:
+            instance.arquivo.storage.delete(old_name)
+
+        return instance
+
+    def update(self, instance, validated_data):
+        arquivo = validated_data.pop("arquivo", None)
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+
+        old_name = self._apply_uploaded_file(instance, arquivo)
+        instance.save()
+
+        if old_name and old_name != instance.arquivo.name:
+            instance.arquivo.storage.delete(old_name)
+
+        return instance
+
+    def get_tamanho_formatado(self, obj):
+        size = int(obj.tamanho_bytes or 0)
+        if size < 1024:
+            return f"{size} B"
+        if size < 1024 * 1024:
+            return f"{size / 1024:.1f} KB"
+        return f"{size / (1024 * 1024):.1f} MB"
+
+    def get_resumo(self, obj):
+        return f"{obj.tipo_arquivo} · {self.get_tamanho_formatado(obj)}"
 
 
 class EscritorioSerializer(serializers.ModelSerializer):
@@ -454,4 +680,3 @@ class PerfilConciliacaoSerializer(serializers.ModelSerializer):
     def get_parametros_count(self, obj):
         params = obj.parametros or []
         return len(params) if isinstance(params, list) else 0
-

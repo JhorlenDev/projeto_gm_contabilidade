@@ -6,6 +6,7 @@ from django.db.models import Q
 from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -18,12 +19,26 @@ from services.conciliador import (
     inspect_importacao_file,
     process_importacao,
 )
+from services.keycloak import KeycloakConfigurationError, KeycloakTokenError, exchange_code_for_token
 from services.pdf_parser import process_extrato_pdf
 from services.parsers.comprovante import parse_comprovante_pdf
 
-from .models import Cliente, Escritorio, ExtratoHistorico, ImportacaoExtrato, PerfilConciliacao, RegraConciliador, StatusImportacao, TransacaoImportada
+from .models import (
+    CertificadoDigitalCliente,
+    Cliente,
+    ContaCliente,
+    Escritorio,
+    ExtratoHistorico,
+    ImportacaoExtrato,
+    PerfilConciliacao,
+    RegraConciliador,
+    StatusImportacao,
+    TransacaoImportada,
+)
 from .serializers import (
     ClienteSerializer,
+    CertificadoDigitalClienteSerializer,
+    ContaClienteSerializer,
     EscritorioSerializer,
     ImportacaoExtratoSerializer,
     PerfilConciliacaoSerializer,
@@ -46,6 +61,47 @@ def _load_json_payload(value):
     return {}
 
 
+class KeycloakTokenExchangeView(APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+    parser_classes = [JSONParser, FormParser]
+
+    def post(self, request):
+        code = str(request.data.get("code") or "").strip()
+        verifier = str(request.data.get("verifier") or request.data.get("code_verifier") or "").strip()
+        redirect_uri = str(request.data.get("redirect_uri") or "").strip()
+
+        if not code or not verifier or not redirect_uri:
+            return Response(
+                {
+                    "error": "invalid_request",
+                    "error_description": "code, verifier e redirect_uri são obrigatórios.",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            response_status, payload = exchange_code_for_token(code, verifier, redirect_uri)
+        except KeycloakConfigurationError as exc:
+            return Response(
+                {
+                    "error": "keycloak_configuration_error",
+                    "error_description": str(exc),
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        except KeycloakTokenError as exc:
+            return Response(
+                {
+                    "error": "keycloak_token_error",
+                    "error_description": str(exc),
+                },
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        return Response(payload, status=response_status)
+
+
 class ClienteViewSet(viewsets.ModelViewSet):
     authentication_classes = [KeycloakJWTAuthentication]
     permission_classes = [HasUserGMRole]
@@ -57,6 +113,82 @@ class ClienteViewSet(viewsets.ModelViewSet):
     search_fields = ["codigo", "nome", "cpf_cnpj", "ie", "telefone", "situacao"]
     ordering_fields = ["codigo", "nome", "cpf_cnpj", "data_inicio", "situacao", "criado_em"]
     ordering = ["nome"]
+
+
+class ContaClienteViewSet(viewsets.ModelViewSet):
+    authentication_classes = [KeycloakJWTAuthentication]
+    permission_classes = [HasUserGMRole]
+    serializer_class = ContaClienteSerializer
+    queryset = ContaCliente.objects.select_related("cliente")
+    lookup_field = "id"
+    lookup_value_regex = r"[0-9a-fA-F-]{36}"
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ["apelido", "banco", "agencia", "numero", "codigo_contabil", "descricao_contabil"]
+    ordering_fields = ["tipo", "apelido", "ativo", "criado_em", "atualizado_em"]
+    ordering = ["-ativo", "tipo", "apelido"]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        cliente_id = self.request.query_params.get("cliente")
+        ativo = self.request.query_params.get("ativo")
+        tipo = self.request.query_params.get("tipo")
+
+        if cliente_id:
+            queryset = queryset.filter(cliente_id=cliente_id)
+
+        if ativo in {"true", "1", "yes"}:
+            queryset = queryset.filter(ativo=True)
+        elif ativo in {"false", "0", "no"}:
+            queryset = queryset.filter(ativo=False)
+
+        if tipo:
+            queryset = queryset.filter(tipo=tipo)
+
+        return queryset
+
+    def destroy(self, request, *args, **kwargs):
+        conta = self.get_object()
+        conta.ativo = False
+        conta.save(update_fields=["ativo", "atualizado_em"])
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class CertificadoDigitalClienteViewSet(viewsets.ModelViewSet):
+    authentication_classes = [KeycloakJWTAuthentication]
+    permission_classes = [HasUserGMRole]
+    serializer_class = CertificadoDigitalClienteSerializer
+    queryset = CertificadoDigitalCliente.objects.select_related("cliente")
+    lookup_field = "id"
+    lookup_value_regex = r"[0-9a-fA-F-]{36}"
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ["cliente__nome", "arquivo_original", "tipo_arquivo"]
+    ordering_fields = ["cliente__nome", "criado_em", "atualizado_em"]
+    ordering = ["cliente__nome"]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        cliente_id = self.request.query_params.get("cliente")
+        ativo = self.request.query_params.get("ativo")
+
+        if cliente_id:
+            queryset = queryset.filter(cliente_id=cliente_id)
+
+        if ativo in {"true", "1", "yes"}:
+            queryset = queryset.filter(ativo=True)
+        elif ativo in {"false", "0", "no"}:
+            queryset = queryset.filter(ativo=False)
+
+        return queryset
+
+    def destroy(self, request, *args, **kwargs):
+        certificado = self.get_object()
+        arquivo = certificado.arquivo
+        arquivo_name = arquivo.name if arquivo else ""
+        if arquivo_name:
+            arquivo.storage.delete(arquivo_name)
+        certificado.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class EscritorioViewSet(viewsets.ModelViewSet):
@@ -331,8 +463,6 @@ class ExtratoPreviewView(APIView):
             "avisos": resultado.avisos,
             "lancamentos": lancamentos,
         })
-
-
 class ComprovantePreviw(APIView):
     """
     POST /api/comprovante-preview/

@@ -6,8 +6,22 @@ from decouple import Csv, config
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+
+def _cast_debug(value):
+    if isinstance(value, bool):
+        return value
+
+    normalized = str(value or "").strip().lower()
+    if normalized in {"1", "true", "yes", "on", "dev", "development", "debug", "local"}:
+        return True
+    if normalized in {"0", "false", "no", "off", "prod", "production", "release"}:
+        return False
+
+    raise ValueError(f"Invalid DEBUG value: {value}")
+
+
 SECRET_KEY = config("SECRET_KEY", default="dev-secret-key")
-DEBUG = config("DEBUG", default=True, cast=bool)
+DEBUG = config("DEBUG", default=True, cast=_cast_debug)
 ALLOWED_HOSTS = config("ALLOWED_HOSTS", default="127.0.0.1,localhost", cast=Csv())
 
 INSTALLED_APPS = [
@@ -74,6 +88,8 @@ USE_TZ = True
 STATIC_URL = "/static/"
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
+PRIVATE_MEDIA_ROOT = BASE_DIR / "private_media"
+FILE_ENCRYPTION_KEY = config("FILE_ENCRYPTION_KEY", default="")
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 CORS_ALLOWED_ORIGINS = config(

@@ -3,8 +3,13 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
+from django.core.exceptions import ValidationError
 from django.db import models
+from django.db.models.signals import post_delete
+from django.dispatch import receiver
 from django.utils import timezone
+
+from services.secure_storage import encrypted_private_storage
 
 
 def _generate_code(prefix: str) -> str:
@@ -38,6 +43,11 @@ class TipoMovimento(models.TextChoices):
     AMBOS = "AMBOS", "Ambos"
 
 
+class TipoContaCliente(models.TextChoices):
+    BANCARIA = "BANCARIA", "Conta bancária"
+    CONTABIL = "CONTABIL", "Conta contábil"
+
+
 class TipoComparacao(models.TextChoices):
     CONTEM = "CONTEM", "Contém"
     IGUAL = "IGUAL", "Igual"
@@ -55,6 +65,7 @@ class Cliente(models.Model):
     codigo = models.CharField(max_length=20, unique=True, blank=True, default="", db_index=True)
     nome = models.CharField(max_length=255)
     cpf_cnpj = models.CharField(max_length=20, db_index=True)
+    email = models.EmailField(blank=True, default="")
     ie = models.CharField(max_length=32, blank=True, default="")
     telefone = models.CharField(max_length=20, blank=True, default="")
     conta_corrente = models.CharField(max_length=30, blank=True, default="", verbose_name="Conta corrente")
@@ -83,6 +94,135 @@ class Cliente(models.Model):
 
     def __str__(self):
         return f"{self.codigo} - {self.nome}"
+
+
+class ContaCliente(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    cliente = models.ForeignKey(Cliente, on_delete=models.PROTECT, related_name="contas")
+    tipo = models.CharField(max_length=20, choices=TipoContaCliente.choices, db_index=True)
+    apelido = models.CharField(max_length=120, blank=True, default="")
+    banco = models.CharField(max_length=120, blank=True, default="")
+    agencia = models.CharField(max_length=20, blank=True, default="")
+    numero = models.CharField(max_length=30, blank=True, default="")
+    codigo_contabil = models.CharField(max_length=40, blank=True, default="")
+    descricao_contabil = models.CharField(max_length=255, blank=True, default="")
+    observacoes = models.TextField(blank=True, default="")
+    ativo = models.BooleanField(default=True, db_index=True)
+    criado_em = models.DateTimeField(auto_now_add=True)
+    atualizado_em = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-ativo", "tipo", "apelido", "criado_em"]
+        indexes = [
+            models.Index(fields=["cliente", "ativo"]),
+            models.Index(fields=["cliente", "tipo"]),
+        ]
+
+    def save(self, *args, **kwargs):
+        self.apelido = str(self.apelido or "").strip()
+        self.banco = str(self.banco or "").strip()
+        self.agencia = str(self.agencia or "").strip()
+        self.numero = str(self.numero or "").strip()
+        self.codigo_contabil = str(self.codigo_contabil or "").strip()
+        self.descricao_contabil = str(self.descricao_contabil or "").strip()
+        self.observacoes = str(self.observacoes or "").strip()
+
+        if self.tipo == TipoContaCliente.BANCARIA:
+            self.codigo_contabil = ""
+            self.descricao_contabil = ""
+        elif self.tipo == TipoContaCliente.CONTABIL:
+            self.banco = ""
+            self.agencia = ""
+            self.numero = ""
+
+        super().save(*args, **kwargs)
+
+    def clean(self):
+        errors = {}
+
+        if self.tipo == TipoContaCliente.BANCARIA:
+            if not self.banco:
+                errors["banco"] = "Informe o banco."
+            if not self.agencia:
+                errors["agencia"] = "Informe a agência."
+            if not self.numero:
+                errors["numero"] = "Informe o número da conta."
+        elif self.tipo == TipoContaCliente.CONTABIL:
+            if not self.codigo_contabil:
+                errors["codigo_contabil"] = "Informe o código contábil."
+        else:
+            errors["tipo"] = "Tipo de conta inválido."
+
+        if errors:
+            raise ValidationError(errors)
+
+    def resumo(self) -> str:
+        if self.tipo == TipoContaCliente.BANCARIA:
+            partes = [self.banco, f"Ag. {self.agencia}" if self.agencia else "", f"Conta {self.numero}" if self.numero else ""]
+            partes = [parte for parte in partes if parte]
+            return " · ".join(partes) or self.apelido or "Conta bancária"
+
+        partes = [self.codigo_contabil, self.descricao_contabil]
+        partes = [parte for parte in partes if parte]
+        return " · ".join(partes) or self.apelido or "Conta contábil"
+
+    def __str__(self):
+        return f"{self.cliente} - {self.resumo()}"
+
+
+def _certificado_upload_to(instance, filename: str) -> str:
+    extension = Path(filename or "certificado").suffix.lower() or ".pfx"
+    cliente = getattr(instance, "cliente_id", None) or "sem-cliente"
+    return f"certificados/{cliente}/{uuid.uuid4().hex}{extension}.enc"
+
+
+class CertificadoDigitalCliente(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    cliente = models.OneToOneField(Cliente, on_delete=models.PROTECT, related_name="certificado_digital")
+    arquivo = models.FileField(upload_to=_certificado_upload_to, storage=encrypted_private_storage, max_length=255)
+    arquivo_original = models.CharField(max_length=255)
+    tipo_arquivo = models.CharField(max_length=10, choices=[("PFX", "PFX"), ("P12", "P12")], db_index=True)
+    tamanho_bytes = models.PositiveBigIntegerField(default=0)
+    hash_sha256 = models.CharField(max_length=64, blank=True, default="", db_index=True)
+    ativo = models.BooleanField(default=True, db_index=True)
+    criado_em = models.DateTimeField(auto_now_add=True)
+    atualizado_em = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-ativo", "cliente__nome"]
+
+    def save(self, *args, **kwargs):
+        self.arquivo_original = str(self.arquivo_original or "").strip()
+        self.tipo_arquivo = str(self.tipo_arquivo or "PFX").upper().strip() or "PFX"
+        self.hash_sha256 = str(self.hash_sha256 or "").strip().lower()
+        super().save(*args, **kwargs)
+
+    def clean(self):
+        errors = {}
+        original = str(self.arquivo_original or getattr(self.arquivo, "name", "")).strip()
+        suffix = Path(original).suffix.lower()
+
+        if not self.cliente_id:
+            errors["cliente"] = "Informe o cliente."
+
+        if not original:
+            errors["arquivo"] = "Envie um certificado digital."
+        elif suffix not in {".pfx", ".p12"}:
+            errors["arquivo"] = "Use arquivos .pfx ou .p12."
+
+        if errors:
+            raise ValidationError(errors)
+
+    def __str__(self):
+        return f"{self.cliente} - certificado digital"
+
+
+@receiver(post_delete, sender=CertificadoDigitalCliente)
+def _delete_certificado_digital_file(_sender, instance, **_kwargs):
+    arquivo = getattr(instance, "arquivo", None)
+    arquivo_name = getattr(arquivo, "name", "")
+    if arquivo_name and getattr(arquivo, "storage", None):
+        arquivo.storage.delete(arquivo_name)
 
 
 class Escritorio(models.Model):

@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Cliente, Escritorio, ImportacaoExtrato, KeycloakUser, RegraConciliador, TransacaoImportada
+from .models import Cliente, ContaCliente, CertificadoDigitalCliente, Escritorio, ImportacaoExtrato, KeycloakUser, RegraConciliador, TransacaoImportada
 
 
 @admin.register(Cliente)
@@ -9,6 +9,22 @@ class ClienteAdmin(admin.ModelAdmin):
     list_filter = ("situacao", "data_inicio")
     search_fields = ("codigo", "nome", "cpf_cnpj", "ie", "telefone")
     ordering = ("nome",)
+
+
+@admin.register(ContaCliente)
+class ContaClienteAdmin(admin.ModelAdmin):
+    list_display = ("cliente", "tipo", "apelido", "ativo", "criado_em")
+    list_filter = ("tipo", "ativo", "cliente")
+    search_fields = ("apelido", "banco", "agencia", "numero", "codigo_contabil", "descricao_contabil", "cliente__nome")
+    ordering = ("-ativo", "tipo", "apelido")
+
+
+@admin.register(CertificadoDigitalCliente)
+class CertificadoDigitalClienteAdmin(admin.ModelAdmin):
+    list_display = ("cliente", "tipo_arquivo", "ativo", "tamanho_bytes", "criado_em")
+    list_filter = ("tipo_arquivo", "ativo", "cliente")
+    search_fields = ("cliente__nome", "arquivo_original", "tipo_arquivo")
+    ordering = ("cliente__nome",)
 
 
 @admin.register(Escritorio)

@@ -231,9 +231,8 @@
     roles.push(...realmRoles);
 
     const resourceAccess = claims?.resource_access || {};
-    Object.values(resourceAccess).forEach((entry) => {
-      roles.push(...(entry?.roles || []));
-    });
+    const clientRoles = resourceAccess?.[CONFIG.keycloak.clientId]?.roles || [];
+    roles.push(...clientRoles);
 
     return Array.from(new Set(roles));
   }
@@ -288,11 +287,14 @@
     return Boolean(session?.roles?.some((role) => normalizeRole(role) === requiredRole));
   }
 
-  function redirectToLogin(reason = "") {
+  function redirectToLogin(reason = "", detail = "") {
     logWarn("Redirecionando para login.", { reason, currentUrl: window.location.href });
     const loginUrl = new URL(buildUrl(CONFIG.pages.login));
     if (reason) {
       loginUrl.searchParams.set("reason", reason);
+    }
+    if (detail) {
+      loginUrl.searchParams.set("detail", detail);
     }
     window.location.replace(loginUrl.toString());
   }
@@ -503,6 +505,13 @@
           <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"/>
         </svg>
       `,
+      accounts: `
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M4 10.5 12 6l8 4.5v1.2H4v-1.2Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+          <path d="M6 11.7v6.3M10 11.7v6.3M14 11.7v6.3M18 11.7v6.3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+          <path d="M3.5 19h17" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+        </svg>
+      `,
       edit: `
         <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <path d="M4 20h4l10.5-10.5a1.8 1.8 0 0 0 0-2.5l-1.5-1.5a1.8 1.8 0 0 0-2.5 0L4 16v4Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
@@ -553,9 +562,10 @@
   }
 
   function maskDocument(value) {
+    const raw = String(value || "").trim();
     const digits = String(value || "").replace(/\D/g, "");
     if (!digits) {
-      return "";
+      return raw;
     }
 
     if (digits.length === 11) {
@@ -566,32 +576,25 @@
       return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8, 12)}-${digits.slice(12)}`;
     }
 
-    if (digits.length > 4) {
-      return `${digits.slice(0, 2)}***${digits.slice(-2)}`;
-    }
-
-    return digits;
+    return raw || digits;
   }
 
   function maskPhone(value) {
+    const raw = String(value || "").trim();
     const digits = String(value || "").replace(/\D/g, "");
     if (!digits) {
-      return "";
+      return raw;
     }
 
     if (digits.length === 10) {
-      return `(${digits.slice(0, 2)}) ***-${digits.slice(-4)}`;
+      return `(${digits.slice(0, 2)}) ${digits.slice(2, 6)}-${digits.slice(6)}`;
     }
 
     if (digits.length === 11) {
-      return `(${digits.slice(0, 2)}) *****-${digits.slice(-4)}`;
+      return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
     }
 
-    if (digits.length > 4) {
-      return `***${digits.slice(-4)}`;
-    }
-
-    return digits;
+    return raw || digits;
   }
 
   function setClientField(element, kind, value) {
@@ -615,6 +618,18 @@
     }
 
     return "ativo";
+  }
+
+  const CLIENT_STATUS_FILTERS = {
+    all: "Cadastrados",
+    ativo: "Ativos",
+    inativo: "Inativos",
+    pausado: "Pausados",
+    analise: "Em Análise",
+  };
+
+  function getClientStatusFilterLabel(filterKey) {
+    return CLIENT_STATUS_FILTERS[filterKey] || CLIENT_STATUS_FILTERS.all;
   }
 
   function formatClientStatus(status) {
@@ -747,11 +762,24 @@
     }
 
     const modal = panel.querySelector("[data-client-modal]");
+    const modalCard = panel.querySelector("[data-client-modal-card]");
     const form = panel.querySelector("[data-client-form]");
+    const modalEyebrow = panel.querySelector(".client-modal-eyebrow");
     const modalTitle = panel.querySelector("[data-client-modal-title]");
+    const modalDescription = panel.querySelector("[data-client-modal-description]");
+    const modalModeLabel = panel.querySelector("[data-client-modal-mode-label]");
+    const modalStatus = panel.querySelector("[data-client-modal-status]");
+    const modalQuickActions = panel.querySelector("[data-client-modal-quick-actions]");
+    const modalQuickEdit = panel.querySelector("[data-client-modal-quick-edit]");
+    const modalQuickToggle = panel.querySelector("[data-client-modal-quick-toggle]");
     const submitButton = panel.querySelector("[data-client-submit]");
     const list = panel.querySelector("[data-client-list]");
     const searchInput = panel.querySelector("[data-client-search]");
+    const filterRoot = panel.querySelector("[data-client-filter]");
+    const filterToggle = panel.querySelector("[data-client-filter-toggle]");
+    const filterMenu = panel.querySelector("[data-client-filter-menu]");
+    const filterLabel = panel.querySelector("[data-client-filter-label]");
+    const filterOptions = Array.from(panel.querySelectorAll("[data-client-filter-option]"));
     const addButtons = panel.querySelectorAll("[data-client-modal-open]");
     const closeButtons = panel.querySelectorAll("[data-client-modal-close]");
     const emptyState = panel.querySelector("[data-client-empty]");
@@ -970,12 +998,14 @@
   function normalizeClientRecord(record) {
     const situacao = String(record?.situacao || "ATIVO").trim() || "ATIVO";
     const situacaoLabel = String(record?.situacao_label || situacao).trim();
+    const statusKey = normalizeClientStatus(situacaoLabel || situacao);
 
     return {
       id: String(record?.id || "").trim(),
       codigo: String(record?.codigo || "").trim(),
       nome: String(record?.nome || "").trim(),
       cpf_cnpj: String(record?.cpf_cnpj || "").trim(),
+      email: String(record?.email || "").trim(),
       ie: String(record?.ie || "").trim(),
       telefone: String(record?.telefone || "").trim(),
       conta_corrente: String(record?.conta_corrente || "").trim(),
@@ -983,10 +1013,12 @@
       data_inicio: String(record?.data_inicio || "").trim(),
       situacao,
       situacao_label: situacaoLabel,
+      statusKey,
       searchIndex: normalizeSearchTerm([
         record?.codigo,
         record?.nome,
         record?.cpf_cnpj,
+        record?.email,
         record?.ie,
         record?.telefone,
         record?.conta_corrente,
@@ -1011,6 +1043,7 @@
     card.dataset.clientTelefone = client.telefone;
     card.dataset.clientDataInicio = client.data_inicio;
     card.dataset.clientSituacao = client.situacao;
+    card.dataset.clientStatusKey = client.statusKey || normalizeClientStatus(client.situacao_label || client.situacao);
     card.dataset.clientSearchIndex = client.searchIndex;
     card.innerHTML = `
       <div class="client-main">
@@ -1025,6 +1058,7 @@
       <div class="client-actions">
         <div class="client-actions-row">
           <button class="client-action client-action-view" type="button" data-client-view aria-label="Ver cliente" title="Ver cliente">${clientActionIcon("view")}</button>
+          <button class="client-action client-action-accounts" type="button" data-client-accounts aria-label="Bancos e contas" title="Bancos e contas">${clientActionIcon("accounts")}</button>
           <button class="client-action client-action-edit" type="button" data-client-edit aria-label="Editar cliente" title="Editar cliente">${clientActionIcon("edit")}</button>
           <button class="client-action client-action-delete" type="button" data-client-delete aria-label="Excluir cliente" title="Excluir cliente">${clientActionIcon("delete")}</button>
         </div>
@@ -1127,6 +1161,7 @@
       codigo: String(data.codigo || "").trim(),
       nome: String(data.nome || "").trim(),
       cpf_cnpj: String(data.cpf_cnpj || "").trim(),
+      email: String(data.email || "").trim(),
       ie: String(data.ie || "").trim(),
       telefone: String(data.telefone || "").trim(),
       conta_corrente: String(data.conta_corrente || "").trim(),
@@ -1141,6 +1176,7 @@
     if (form.elements.codigo) form.elements.codigo.value = client.codigo;
     if (form.elements.nome) form.elements.nome.value = client.nome;
     if (form.elements.cpf_cnpj) form.elements.cpf_cnpj.value = client.cpf_cnpj;
+    if (form.elements.email) form.elements.email.value = client.email;
     if (form.elements.ie) form.elements.ie.value = client.ie;
     if (form.elements.telefone) form.elements.telefone.value = client.telefone;
     if (form.elements.conta_corrente) form.elements.conta_corrente.value = client.conta_corrente;
@@ -2186,12 +2222,25 @@
 
     const modal = panel.querySelector("[data-client-modal]");
     const summaryPanel = panel.querySelector("[data-clients-summary]");
+    const modalCard = panel.querySelector("[data-client-modal-card]");
     const form = panel.querySelector("[data-client-form]");
+    const modalEyebrow = panel.querySelector(".client-modal-eyebrow");
     const modalTitle = panel.querySelector("[data-client-modal-title]");
     const eyebrow = panel.querySelector("[data-client-detail-eyebrow]");
+    const modalDescription = panel.querySelector("[data-client-modal-description]");
+    const modalModeLabel = panel.querySelector("[data-client-modal-mode-label]");
+    const modalStatus = panel.querySelector("[data-client-modal-status]");
+    const modalQuickActions = panel.querySelector("[data-client-modal-quick-actions]");
+    const modalQuickEdit = panel.querySelector("[data-client-modal-quick-edit]");
+    const modalQuickToggle = panel.querySelector("[data-client-modal-quick-toggle]");
     const submitButton = panel.querySelector("[data-client-submit]");
     const list = panel.querySelector("[data-client-list]");
     const searchInput = panel.querySelector("[data-client-search]");
+    const filterRoot = panel.querySelector("[data-client-filter]");
+    const filterToggle = panel.querySelector("[data-client-filter-toggle]");
+    const filterMenu = panel.querySelector("[data-client-filter-menu]");
+    const filterLabel = panel.querySelector("[data-client-filter-label]");
+    const filterOptions = Array.from(panel.querySelectorAll("[data-client-filter-option]"));
     const addButtons = panel.querySelectorAll("[data-client-modal-open]");
     const closeButtons = panel.querySelectorAll("[data-client-modal-close]");
     const tabButtons = panel.querySelectorAll("[data-client-tab]");
@@ -2204,6 +2253,101 @@
     const summaryActive = panel.querySelector("[data-client-summary-active]");
     const summaryReview = panel.querySelector("[data-client-summary-review]");
     const summaryPaused = panel.querySelector("[data-client-summary-paused]");
+    const accountNewButton = panel.querySelector("[data-client-account-new]");
+    const accountForm = panel.querySelector("[data-client-account-form]");
+    const accountFormTitle = panel.querySelector("[data-client-account-form-title]");
+    const accountFormSubtitle = panel.querySelector("[data-client-account-form-subtitle]");
+    const accountFormCancel = panel.querySelector("[data-client-account-cancel]");
+    const accountFormSubmit = panel.querySelector("[data-client-account-submit]");
+    const accountList = panel.querySelector("[data-client-account-list]");
+    const accountLayout = panel.querySelector(".client-account-layout");
+    const accountEmpty = panel.querySelector("[data-client-account-empty]");
+    const accountHint = panel.querySelector("[data-client-account-hint]");
+    const accountType = accountForm?.querySelector("[name='tipo']") || null;
+    const accountFieldsBank = panel.querySelector("[data-account-fields='bancaria']");
+    const accountFieldsContabil = panel.querySelector("[data-account-fields='contabil']");
+    const ACCOUNT_BANK_OTHER_VALUE = "OUTRO";
+    const ACCOUNT_BANK_OPTIONS = [
+      "Banco do Brasil",
+      "Bradesco",
+      "Caixa",
+      "Santander",
+      "Itaú",
+      "Banco Inter",
+      "Nubank",
+      "Sicredi",
+      "Sicoob",
+      "BTG Pactual",
+      "Safra",
+      "Banrisul",
+      "C6 Bank",
+      "Banco Original",
+      "Banco do Nordeste",
+      "Mercantil do Brasil",
+      "Daycoval",
+      "Banco PAN",
+      "BV",
+    ];
+    const ACCOUNT_BANK_ALIASES = {
+      "caixa economica federal": "Caixa",
+      "itau unibanco": "Itaú",
+      inter: "Banco Inter",
+      original: "Banco Original",
+      "banco safra": "Safra",
+      mercantil: "Mercantil do Brasil",
+      "banco pan": "Banco PAN",
+    };
+    const BANK_VISUALS = {
+      "banco do brasil": { initials: "BB", className: "bb" },
+      bradesco: { initials: "BR", className: "bradesco" },
+      caixa: { initials: "CX", className: "caixa" },
+      santander: { initials: "ST", className: "santander" },
+      itau: { initials: "IT", className: "itau" },
+      "banco inter": { initials: "IN", className: "inter" },
+      nubank: { initials: "NU", className: "nubank" },
+      sicredi: { initials: "SI", className: "sicredi" },
+      sicoob: { initials: "SC", className: "sicoob" },
+      "btg pactual": { initials: "BT", className: "btg" },
+      safra: { initials: "SF", className: "safra" },
+      banrisul: { initials: "BN", className: "banrisul" },
+      "c6 bank": { initials: "C6", className: "c6" },
+      "banco original": { initials: "OR", className: "original" },
+      "banco do nordeste": { initials: "NE", className: "nordeste" },
+      "mercantil do brasil": { initials: "MB", className: "mercantil" },
+      daycoval: { initials: "DY", className: "daycoval" },
+      "banco pan": { initials: "PAN", className: "pan" },
+      bv: { initials: "BV", className: "bv" },
+    };
+    const certificateStatus = panel.querySelector("[data-client-certificate-status]");
+    const certificateMeta = panel.querySelector("[data-client-certificate-meta]");
+    const certificateInput = panel.querySelector("[data-client-certificate-file]");
+    const certificateSubmit = panel.querySelector("[data-client-certificate-submit]");
+    const certificateClear = panel.querySelector("[data-client-certificate-clear]");
+    const certificateDelete = panel.querySelector("[data-client-certificate-delete]");
+    const accountsCard = panel.querySelector(".client-accounts-card");
+    const certificateCard = panel.querySelector(".client-certificate-card");
+    const relatedGrid = panel.querySelector(".client-related-grid");
+    const basicSummaryCard = panel.querySelector("[data-client-basic-summary]");
+    const basicSummaryFields = {
+      document: panel.querySelector("[data-client-basic-document]"),
+      email: panel.querySelector("[data-client-basic-email]"),
+      phone: panel.querySelector("[data-client-basic-phone]"),
+      start: panel.querySelector("[data-client-basic-start]"),
+    };
+    const clientAccountFormFields = accountForm ? {
+      id: accountForm.elements.namedItem("id"),
+      cliente: accountForm.elements.namedItem("cliente"),
+      tipo: accountForm.elements.namedItem("tipo"),
+      apelido: accountForm.elements.namedItem("apelido"),
+      bankSelect: accountForm.querySelector("[data-client-account-bank-select]"),
+      bankOtherWrap: accountForm.querySelector("[data-client-account-bank-other-wrap]"),
+      banco: accountForm.elements.namedItem("banco"),
+      agencia: accountForm.elements.namedItem("agencia"),
+      numero: accountForm.elements.namedItem("numero"),
+      codigo_contabil: accountForm.elements.namedItem("codigo_contabil"),
+      descricao_contabil: accountForm.elements.namedItem("descricao_contabil"),
+      observacoes: accountForm.elements.namedItem("observacoes"),
+    } : {};
     const historicoSection = panel.querySelector("[data-client-historico-section]");
     const historicoLoading = panel.querySelector("[data-client-historico-loading]");
     const historicoEmpty = panel.querySelector("[data-client-historico-empty]");
@@ -2223,27 +2367,1022 @@
       loading: false,
       error: "",
       activeClientId: null,
+      activeClientRecord: null,
       activeClientMode: "create",
+      statusFilter: "all",
+      accounts: [],
+      accountEditingId: null,
+      certificate: null,
+      certificateLoading: false,
+      relationRequestToken: 0,
     };
 
-function setClientFormMode(mode) {
+    let lastCustomBankValue = "";
+
+    function getClientModeLabel(mode) {
+      if (mode === "view") {
+        return "Visualização";
+      }
+
+      if (mode === "accounts") {
+        return "Contas";
+      }
+
+      if (mode === "edit") {
+        return "Edição";
+      }
+
+      return "Criação";
+    }
+
+    function getClientModeDescription(mode) {
+      if (mode === "view") {
+        return "Confira os dados principais do cliente em modo somente leitura.";
+      }
+
+      if (mode === "accounts") {
+        return "Veja os dados básicos e gerencie as contas bancárias e contábeis deste cliente.";
+      }
+
+      if (mode === "edit") {
+        return "Atualize os dados principais do cliente.";
+      }
+
+      return "Preencha os dados principais do cliente.";
+    }
+
+    function isClientReadOnlyMode(mode = state.activeClientMode) {
+      return mode === "view" || mode === "accounts";
+    }
+
+    function getActiveClientRecord() {
+      if (state.activeClientRecord) {
+        return state.activeClientRecord;
+      }
+
+      if (!state.activeClientId) {
+        return null;
+      }
+
+      return state.clients.find((client) => client.id === state.activeClientId) || null;
+    }
+
+    function getClientStatusLabel(record) {
+      return String(record?.situacao_label || record?.situacao || "—").trim() || "—";
+    }
+
+    function getClientStatusToggleLabel(record) {
+      const statusKey = normalizeClientStatus(record?.situacao_label || record?.situacao);
+      return statusKey === "ativo" ? "Desativar" : "Ativar";
+    }
+
+    function getClientStatusToggleValue(record) {
+      const statusKey = normalizeClientStatus(record?.situacao_label || record?.situacao);
+      return statusKey === "ativo" ? "INATIVO" : "ATIVO";
+    }
+
+    function syncClientModalHeader(mode) {
+      const client = getActiveClientRecord();
+      const readOnlyMode = isClientReadOnlyMode(mode);
+
+      if (modalEyebrow) {
+        modalEyebrow.textContent = readOnlyMode
+          ? (mode === "accounts" ? "Bancos e contas" : "Visualização de cliente")
+          : (mode === "edit" ? "Edição de cliente" : "Cadastro de cliente");
+      }
+
+      if (modalTitle) {
+        modalTitle.textContent = readOnlyMode && client
+          ? client.nome || "Cliente"
+          : mode === "edit"
+            ? "Editar cliente"
+            : "Novo cliente";
+      }
+
+      if (modalModeLabel) {
+        modalModeLabel.textContent = getClientModeLabel(mode);
+      }
+
+      if (modalDescription) {
+        modalDescription.textContent = getClientModeDescription(mode);
+      }
+
+      if (modalStatus) {
+        modalStatus.hidden = !readOnlyMode || !client;
+        modalStatus.textContent = getClientStatusLabel(client);
+      }
+
+      if (modalQuickActions) {
+        modalQuickActions.hidden = !readOnlyMode || !client;
+      }
+
+      if (modalQuickEdit) {
+        modalQuickEdit.hidden = !readOnlyMode || !client;
+      }
+
+      if (modalQuickToggle) {
+        modalQuickToggle.hidden = !readOnlyMode || !client;
+        modalQuickToggle.textContent = getClientStatusToggleLabel(client);
+      }
+    }
+
+    function updateRelatedControls() {
+      const readOnlyMode = isClientReadOnlyMode();
+      const accountsMode = state.activeClientMode === "accounts";
+      const certificateMode = state.activeClientMode === "view" || state.activeClientMode === "edit";
+      const relatedEnabled = Boolean(state.activeClientId) && accountsMode && !state.certificateLoading;
+      const certificateEnabled = Boolean(state.activeClientId) && certificateMode && !state.certificateLoading;
+
+      if (accountNewButton) accountNewButton.disabled = !relatedEnabled;
+      if (accountFormSubmit) accountFormSubmit.disabled = !relatedEnabled;
+      if (certificateSubmit) certificateSubmit.disabled = !certificateEnabled;
+      if (certificateClear) certificateClear.disabled = !certificateEnabled;
+      if (certificateDelete) certificateDelete.disabled = !certificateEnabled;
+      if (certificateInput) certificateInput.disabled = !certificateEnabled;
+    }
+
+    function renderClientBasicSummary(record) {
+      if (!basicSummaryCard) {
+        return;
+      }
+
+      const client = record ? normalizeClientRecord(record) : null;
+      if (!client) {
+        if (basicSummaryFields.document) basicSummaryFields.document.textContent = "—";
+        if (basicSummaryFields.email) basicSummaryFields.email.textContent = "—";
+        if (basicSummaryFields.phone) basicSummaryFields.phone.textContent = "—";
+        if (basicSummaryFields.start) basicSummaryFields.start.textContent = "—";
+        return;
+      }
+
+      const startLabel = client.data_inicio
+        ? new Date(`${client.data_inicio}T00:00:00`).toLocaleDateString("pt-BR")
+        : "—";
+
+      if (basicSummaryFields.document) basicSummaryFields.document.textContent = maskDocument(client.cpf_cnpj) || client.cpf_cnpj || "—";
+      if (basicSummaryFields.email) basicSummaryFields.email.textContent = client.email || "—";
+      if (basicSummaryFields.phone) basicSummaryFields.phone.textContent = maskPhone(client.telefone) || client.telefone || "—";
+      if (basicSummaryFields.start) basicSummaryFields.start.textContent = startLabel;
+    }
+
+    function normalizeBankValue(value) {
+      return String(value || "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase()
+        .trim();
+    }
+
+    function resolveKnownBank(value) {
+      const normalized = normalizeBankValue(value);
+      if (!normalized) {
+        return "";
+      }
+
+      const alias = ACCOUNT_BANK_ALIASES[normalized];
+      if (alias) {
+        return alias;
+      }
+
+      return ACCOUNT_BANK_OPTIONS.find((option) => normalizeBankValue(option) === normalized) || "";
+    }
+
+    function makeBankInitials(value) {
+      const words = String(value || "")
+        .trim()
+        .split(/\s+/)
+        .filter((word) => !["banco", "bank", "do", "da", "de", "dos", "das"].includes(normalizeBankValue(word)));
+      const source = words.length ? words : String(value || "Banco").trim().split(/\s+/);
+      const initials = source.slice(0, 2).map((word) => word.charAt(0)).join("").toUpperCase();
+      return initials || "BK";
+    }
+
+    function getAccountVisual(account) {
+      if (account.tipo === "CONTABIL") {
+        return {
+          label: "Conta contábil",
+          initials: "CT",
+          className: "contabil",
+        };
+      }
+
+      const bankName = resolveKnownBank(account.banco) || account.banco || "Conta bancária";
+      const visual = BANK_VISUALS[normalizeBankValue(bankName)];
+      return {
+        label: bankName,
+        initials: visual?.initials || makeBankInitials(bankName),
+        className: visual?.className || "other",
+      };
+    }
+
+    function syncAccountBankField() {
+      const bankSelect = clientAccountFormFields.bankSelect;
+      const bankInput = clientAccountFormFields.banco;
+      if (!bankSelect || !bankInput) {
+        return;
+      }
+
+      const isBankAccount = accountType?.value === "BANCARIA";
+      const selectedValue = String(bankSelect.value || "").trim();
+      const knownBank = resolveKnownBank(selectedValue);
+
+      if (!isBankAccount) {
+        bankSelect.disabled = true;
+        bankSelect.required = false;
+        bankInput.disabled = true;
+        bankInput.required = false;
+        if (clientAccountFormFields.bankOtherWrap) {
+          clientAccountFormFields.bankOtherWrap.hidden = true;
+        }
+        return;
+      }
+
+      bankSelect.disabled = false;
+      bankSelect.required = true;
+
+      if (selectedValue === ACCOUNT_BANK_OTHER_VALUE) {
+        bankInput.disabled = false;
+        bankInput.required = true;
+        bankInput.value = lastCustomBankValue || "";
+        if (clientAccountFormFields.bankOtherWrap) {
+          clientAccountFormFields.bankOtherWrap.hidden = false;
+        }
+        return;
+      }
+
+      if (selectedValue && !knownBank) {
+        bankSelect.value = "";
+        bankInput.value = "";
+        bankInput.disabled = true;
+        bankInput.required = false;
+        if (clientAccountFormFields.bankOtherWrap) {
+          clientAccountFormFields.bankOtherWrap.hidden = true;
+        }
+        return;
+      }
+
+      if (bankInput.value && !resolveKnownBank(bankInput.value)) {
+        lastCustomBankValue = bankInput.value.trim();
+      }
+
+      bankInput.value = knownBank ? knownBank : "";
+      bankInput.disabled = true;
+      bankInput.required = false;
+      if (clientAccountFormFields.bankOtherWrap) {
+        clientAccountFormFields.bankOtherWrap.hidden = true;
+      }
+
+      if (knownBank) {
+        bankSelect.value = knownBank;
+      }
+    }
+
+    function setAccountBankSelection(bankValue) {
+      const normalized = String(bankValue || "").trim();
+      const knownBank = resolveKnownBank(normalized);
+      lastCustomBankValue = knownBank ? "" : normalized;
+
+      if (clientAccountFormFields.bankSelect) {
+        clientAccountFormFields.bankSelect.value = knownBank ? knownBank : normalized ? ACCOUNT_BANK_OTHER_VALUE : "";
+      }
+
+      if (clientAccountFormFields.banco) {
+        clientAccountFormFields.banco.value = knownBank ? knownBank : normalized;
+      }
+
+      syncAccountBankField();
+    }
+
+    function getSelectedAccountBank() {
+      const bankSelect = clientAccountFormFields.bankSelect;
+      const bankInput = clientAccountFormFields.banco;
+
+      if (!bankSelect || !bankInput) {
+        return "";
+      }
+
+      const selectedValue = String(bankSelect.value || "").trim();
+      if (selectedValue === ACCOUNT_BANK_OTHER_VALUE) {
+        return String(bankInput.value || "").trim();
+      }
+
+      return resolveKnownBank(selectedValue) || String(bankInput.value || "").trim();
+    }
+
+    function setClientFormMode(mode) {
+      const viewMode = mode === "view";
+      const accountsMode = mode === "accounts";
+      const certificateMode = mode === "view" || mode === "edit";
       form.dataset.clientMode = mode;
+      if (modalCard) {
+        modalCard.dataset.clientMode = mode;
+      }
+
+      syncClientModalHeader(mode);
+
+      if (form) {
+        form.hidden = accountsMode;
+      }
+
+      if (basicSummaryCard) {
+        basicSummaryCard.hidden = !accountsMode;
+      }
+
+      if (relatedGrid) {
+        relatedGrid.hidden = !(accountsMode || certificateMode);
+      }
+
+      if (accountsCard) {
+        accountsCard.hidden = !accountsMode;
+      }
+
+      if (certificateCard) {
+        certificateCard.hidden = !certificateMode;
+      }
 
       form.querySelectorAll("input, textarea").forEach((field) => {
         if (field.name === "codigo") {
           field.readOnly = true;
           return;
         }
-        field.readOnly = mode === "view";
+        field.readOnly = viewMode;
       });
 
       if (form.elements.situacao) {
-        form.elements.situacao.disabled = mode === "view";
+        form.elements.situacao.disabled = viewMode;
       }
 
       if (submitButton) {
-        submitButton.textContent = mode === "view" ? "Fechar" : mode === "create" ? "Salvar cliente" : "Salvar alterações";
+        submitButton.textContent = viewMode ? "Fechar" : mode === "accounts" ? "Fechar" : mode === "create" ? "Salvar cliente" : "Salvar alterações";
       }
+
+      if (accountFormCancel) accountFormCancel.disabled = false;
+
+      updateRelatedControls();
+
+      renderAccounts();
+      renderCertificate();
+    }
+
+    function syncAccountTypeFields() {
+      if (!accountForm || !accountType) {
+        return;
+      }
+
+      const isBank = accountType.value === "BANCARIA";
+      if (accountFieldsBank) {
+        accountFieldsBank.classList.toggle("is-active", isBank);
+      }
+      if (accountFieldsContabil) {
+        accountFieldsContabil.classList.toggle("is-active", !isBank);
+      }
+
+      syncAccountBankField();
+    }
+
+    function formatCertificateSize(size) {
+      if (typeof formatConciliadorFileSize === "function") {
+        return formatConciliadorFileSize(size);
+      }
+
+      if (!Number.isFinite(size) || size <= 0) {
+        return "0 B";
+      }
+
+      if (size < 1024) return `${size} B`;
+      if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+      return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+    }
+
+    function normalizeAccount(record) {
+      return {
+        id: String(record?.id || "").trim(),
+        cliente: String(record?.cliente || state.activeClientId || "").trim(),
+        tipo: String(record?.tipo || "BANCARIA").trim() || "BANCARIA",
+        tipo_label: String(record?.tipo_label || record?.tipo || "Conta bancária").trim(),
+        apelido: String(record?.apelido || "").trim(),
+        banco: String(record?.banco || "").trim(),
+        agencia: String(record?.agencia || "").trim(),
+        numero: String(record?.numero || "").trim(),
+        codigo_contabil: String(record?.codigo_contabil || "").trim(),
+        descricao_contabil: String(record?.descricao_contabil || "").trim(),
+        observacoes: String(record?.observacoes || "").trim(),
+        ativo: Boolean(record?.ativo),
+        resumo: String(record?.resumo || "").trim(),
+      };
+    }
+
+    function normalizeCertificate(record) {
+      if (!record) {
+        return null;
+      }
+
+      return {
+        id: String(record?.id || "").trim(),
+        cliente: String(record?.cliente || state.activeClientId || "").trim(),
+        arquivo_original: String(record?.arquivo_original || "").trim(),
+        tipo_arquivo: String(record?.tipo_arquivo || "PFX").trim() || "PFX",
+        tipo_arquivo_label: String(record?.tipo_arquivo_label || record?.tipo_arquivo || "PFX").trim(),
+        tamanho_bytes: Number(record?.tamanho_bytes || 0),
+        tamanho_formatado: String(record?.tamanho_formatado || "").trim(),
+        hash_sha256: String(record?.hash_sha256 || "").trim(),
+        ativo: Boolean(record?.ativo),
+        resumo: String(record?.resumo || "").trim(),
+        criado_em: String(record?.criado_em || "").trim(),
+        atualizado_em: String(record?.atualizado_em || "").trim(),
+      };
+    }
+
+    function setAccountFormVisible(visible) {
+      if (!accountForm) {
+        return;
+      }
+
+      accountForm.hidden = !visible;
+      if (accountLayout) {
+        accountLayout.classList.toggle("has-account-form", Boolean(visible));
+      }
+    }
+
+    function resetAccountForm() {
+      state.accountEditingId = null;
+      if (!accountForm) {
+        return;
+      }
+
+      accountForm.reset();
+      if (clientAccountFormFields.id) clientAccountFormFields.id.value = "";
+      if (clientAccountFormFields.cliente) clientAccountFormFields.cliente.value = state.activeClientId || "";
+      if (clientAccountFormFields.tipo) clientAccountFormFields.tipo.value = "BANCARIA";
+      lastCustomBankValue = "";
+      setAccountBankSelection("");
+      syncAccountTypeFields();
+      setAccountFormVisible(false);
+      if (accountFormTitle) accountFormTitle.textContent = "Nova conta";
+      if (accountFormSubtitle) accountFormSubtitle.textContent = "Configure contas bancárias ou contábeis vinculadas a este cliente.";
+      if (accountFormSubmit) accountFormSubmit.textContent = "Salvar conta";
+    }
+
+    function openAccountForm(record = null) {
+      if (!accountForm || !state.activeClientId || state.activeClientMode !== "accounts") {
+        return;
+      }
+
+      state.accountEditingId = record?.id || null;
+      accountForm.reset();
+      if (clientAccountFormFields.id) clientAccountFormFields.id.value = record?.id || "";
+      if (clientAccountFormFields.cliente) clientAccountFormFields.cliente.value = state.activeClientId || "";
+      if (clientAccountFormFields.tipo) clientAccountFormFields.tipo.value = record?.tipo || "BANCARIA";
+      if (clientAccountFormFields.apelido) clientAccountFormFields.apelido.value = record?.apelido || "";
+      setAccountBankSelection(record?.tipo === "BANCARIA" ? (record?.banco || "") : "");
+      if (clientAccountFormFields.agencia) clientAccountFormFields.agencia.value = record?.agencia || "";
+      if (clientAccountFormFields.numero) clientAccountFormFields.numero.value = record?.numero || "";
+      if (clientAccountFormFields.codigo_contabil) clientAccountFormFields.codigo_contabil.value = record?.codigo_contabil || "";
+      if (clientAccountFormFields.descricao_contabil) clientAccountFormFields.descricao_contabil.value = record?.descricao_contabil || "";
+      if (clientAccountFormFields.observacoes) clientAccountFormFields.observacoes.value = record?.observacoes || "";
+
+      if (accountFormTitle) accountFormTitle.textContent = record?.id ? "Editar conta" : "Nova conta";
+      if (accountFormSubtitle) accountFormSubtitle.textContent = record?.id
+        ? `Atualize os dados da conta ${record.apelido || record.resumo || "selecionada"}.`
+        : "Configure contas bancárias ou contábeis vinculadas a este cliente.";
+      if (accountFormSubmit) accountFormSubmit.textContent = record?.id ? "Salvar alterações" : "Salvar conta";
+
+      syncAccountTypeFields();
+      setAccountFormVisible(true);
+      if (accountHint) accountHint.textContent = record?.id ? "Editando conta selecionada." : "Preencha os campos da nova conta.";
+      window.requestAnimationFrame(() => {
+        const firstField = clientAccountFormFields.apelido || clientAccountFormFields.tipo;
+        if (firstField && typeof firstField.focus === "function") {
+          firstField.focus();
+        }
+      });
+    }
+
+    function renderAccounts() {
+      if (!accountList || !accountEmpty) {
+        return;
+      }
+
+      const accounts = Array.isArray(state.accounts) ? state.accounts.map(normalizeAccount) : [];
+      const loading = state.certificateLoading && Boolean(state.activeClientId);
+      const accountsMode = state.activeClientMode === "accounts";
+      const canManage = Boolean(state.activeClientId) && accountsMode && !loading;
+      accountList.innerHTML = accounts.map((account) => {
+        const bankVisual = getAccountVisual(account);
+        const bankLabel = account.tipo === "CONTABIL" ? "Conta contábil" : bankVisual.label;
+        const accountLabel = account.tipo === "CONTABIL"
+          ? (account.codigo_contabil || account.descricao_contabil || "—")
+          : (account.numero || "—");
+        const statusLabel = account.ativo ? "Ativa" : "Inativa";
+        const statusClass = account.ativo ? "status-ok" : "status-error";
+
+        return `
+          <article class="client-account-item" data-client-account-id="${escapeHtml(account.id)}">
+            <div class="client-account-item-head">
+              <div class="client-account-main">
+                <span class="client-bank-logo client-bank-logo--${escapeHtml(bankVisual.className)}" title="${escapeHtml(bankVisual.label)}" aria-hidden="true">${escapeHtml(bankVisual.initials)}</span>
+                <div class="client-account-item-title">
+                  <strong>${escapeHtml(bankLabel)}</strong>
+                  <span>Agência: ${escapeHtml(account.agencia || "—")}</span>
+                  <span>Conta: ${escapeHtml(accountLabel)}</span>
+                </div>
+              </div>
+              <span class="client-related-badge ${statusClass}">${statusLabel}</span>
+            </div>
+            ${account.observacoes ? `<div class="client-account-item-meta">${escapeHtml(account.observacoes)}</div>` : ""}
+            ${canManage ? `
+              <div class="client-account-item-actions">
+                <button type="button" class="secondary" data-client-account-edit>Editar</button>
+                <button type="button" class="secondary" data-client-account-toggle>${account.ativo ? "Desativar" : "Ativar"}</button>
+              </div>
+            ` : ""}
+          </article>
+        `;
+      }).join("");
+
+      const hasAccounts = accounts.length > 0;
+      if (loading && !hasAccounts) {
+        accountEmpty.hidden = false;
+        accountEmpty.textContent = "Carregando contas vinculadas...";
+      } else {
+        accountEmpty.hidden = hasAccounts || !state.activeClientId;
+        accountEmpty.textContent = state.activeClientId
+          ? "Ainda não há contas vinculadas a este cliente."
+          : "Salve o cliente para começar a vincular contas.";
+      }
+
+      if (accountHint) {
+        if (loading) {
+          accountHint.textContent = "Carregando contas vinculadas...";
+        } else {
+          accountHint.textContent = state.activeClientId
+            ? (canManage ? "Gerencie as contas vinculadas abaixo." : "Abra a área de bancos para gerenciar contas vinculadas.")
+            : "Salve o cliente para começar a vincular contas.";
+        }
+      }
+
+      if (!hasAccounts && state.activeClientId && accountsMode && !state.accountEditingId && accountForm?.hidden) {
+        setAccountFormVisible(false);
+      }
+
+      updateRelatedControls();
+    }
+
+    function renderCertificate() {
+      if (!certificateStatus || !certificateMeta) {
+        return;
+      }
+
+      const certificate = state.certificate;
+      const loading = state.certificateLoading && Boolean(state.activeClientId);
+      const certificateMode = state.activeClientMode === "view" || state.activeClientMode === "edit";
+      const canManage = Boolean(state.activeClientId) && certificateMode && !loading;
+
+      if (loading) {
+        certificateStatus.textContent = "Carregando certificado...";
+        certificateMeta.innerHTML = `
+          <strong>Carregando dados relacionados</strong>
+          <span>Aguarde enquanto o certificado digital do cliente é carregado.</span>
+        `;
+        if (certificateDelete) certificateDelete.hidden = true;
+        if (certificateInput) certificateInput.disabled = true;
+        if (certificateSubmit) certificateSubmit.disabled = true;
+        if (certificateClear) certificateClear.disabled = true;
+        updateRelatedControls();
+        return;
+      }
+
+      if (!state.activeClientId) {
+        certificateStatus.textContent = "Salve o cliente";
+        certificateMeta.innerHTML = `
+          <strong>Nenhum certificado enviado</strong>
+          <span>Salve o cliente para enviar o certificado digital.</span>
+        `;
+        if (certificateDelete) certificateDelete.hidden = true;
+        if (certificateInput) certificateInput.disabled = true;
+        if (certificateSubmit) certificateSubmit.disabled = true;
+        if (certificateClear) certificateClear.disabled = true;
+        return;
+      }
+
+      if (!certificate) {
+        certificateStatus.textContent = canManage ? "Sem certificado" : "Visualização";
+        certificateMeta.innerHTML = `
+          <strong>Nenhum certificado enviado</strong>
+          <span>Anexe um arquivo .pfx ou .p12 para manter o certificado disponível em armazenamento privado.</span>
+        `;
+        if (certificateDelete) certificateDelete.hidden = true;
+        if (certificateInput) certificateInput.disabled = !canManage;
+        if (certificateSubmit) certificateSubmit.disabled = !canManage;
+        if (certificateClear) certificateClear.disabled = !canManage;
+        return;
+      }
+
+      const normalized = normalizeCertificate(certificate);
+      const fileName = normalized.arquivo_original || "certificado digital";
+      const dateLabel = normalized.atualizado_em ? new Date(normalized.atualizado_em).toLocaleDateString("pt-BR") : "—";
+      const sizeLabel = normalized.tamanho_formatado || formatCertificateSize(normalized.tamanho_bytes);
+
+      certificateStatus.textContent = normalized.ativo ? "Certificado ativo" : "Certificado inativo";
+      certificateMeta.innerHTML = `
+        <strong>${escapeHtml(fileName)}</strong>
+        <span>${escapeHtml(normalized.tipo_arquivo_label || normalized.tipo_arquivo)} · ${escapeHtml(sizeLabel)} · atualizado em ${escapeHtml(dateLabel)}</span>
+      `;
+
+      if (certificateDelete) {
+        certificateDelete.hidden = !canManage;
+      }
+
+      if (certificateInput) certificateInput.disabled = !canManage;
+      if (certificateSubmit) certificateSubmit.disabled = !canManage;
+      if (certificateClear) certificateClear.disabled = !canManage;
+
+      updateRelatedControls();
+    }
+
+    async function loadClientRelations(clientId, options = {}) {
+      const includeAccounts = options.includeAccounts !== false;
+      const includeCertificate = options.includeCertificate !== false;
+
+      if (!clientId) {
+        state.accounts = [];
+        state.certificate = null;
+        state.certificateLoading = false;
+        renderAccounts();
+        renderCertificate();
+        return;
+      }
+
+      const requestToken = ++state.relationRequestToken;
+      state.accounts = [];
+      state.certificate = null;
+      state.certificateLoading = true;
+      updateRelatedControls();
+      renderAccounts();
+      renderCertificate();
+
+      try {
+        const requests = [];
+        if (includeAccounts) {
+          requests.push(apiRequest(session, `/contas-clientes/?cliente=${clientId}`));
+        }
+        if (includeCertificate) {
+          requests.push(apiRequest(session, `/certificados-clientes/?cliente=${clientId}`));
+        }
+
+        const responses = await Promise.all(requests);
+        const accountsPayload = includeAccounts ? responses.shift() : [];
+        const certificatePayload = includeCertificate ? responses.shift() : [];
+
+        if (requestToken !== state.relationRequestToken || clientId !== state.activeClientId) {
+          return;
+        }
+
+        state.accounts = includeAccounts
+          ? (Array.isArray(accountsPayload) ? accountsPayload : (accountsPayload?.results || []))
+          : [];
+        if (includeCertificate) {
+          const certRecords = Array.isArray(certificatePayload) ? certificatePayload : (certificatePayload?.results || []);
+          state.certificate = certRecords[0] || null;
+        } else {
+          state.certificate = null;
+        }
+      } catch (error) {
+        if (requestToken !== state.relationRequestToken || clientId !== state.activeClientId) {
+          return;
+        }
+
+        state.accounts = [];
+        state.certificate = null;
+        logWarn("Falha ao carregar contas ou certificado do cliente.", error);
+        if (accountHint) {
+          accountHint.textContent = "Não foi possível carregar contas vinculadas agora.";
+        }
+      } finally {
+        if (requestToken !== state.relationRequestToken || clientId !== state.activeClientId) {
+          return;
+        }
+
+        state.certificateLoading = false;
+        updateRelatedControls();
+        renderAccounts();
+        renderCertificate();
+
+        if (state.activeClientMode === "accounts" && accountNewButton && !accountNewButton.disabled && typeof accountNewButton.focus === "function") {
+          accountNewButton.focus();
+        }
+      }
+    }
+
+    async function toggleClientStatus() {
+      const client = getActiveClientRecord();
+      if (!client?.id) {
+        return;
+      }
+
+      const nextStatus = getClientStatusToggleValue(client);
+
+      try {
+        const saved = await apiRequest(session, `/clientes/${client.id}/`, {
+          method: "PATCH",
+          body: { situacao: nextStatus },
+        });
+
+        const normalized = normalizeClientRecord(saved || { ...client, situacao: nextStatus });
+        state.activeClientRecord = normalized;
+
+        const listRecord = state.clients.find((item) => item.id === normalized.id);
+        if (listRecord) {
+          Object.assign(listRecord, normalized);
+        }
+
+        syncClientModalHeader(state.activeClientMode);
+        renderClientBasicSummary(normalized);
+        updateDashboardStats(state.clients);
+        renderState();
+      } catch (error) {
+        logError("Falha ao atualizar a situação do cliente.", error);
+      }
+    }
+
+    async function saveAccount() {
+      if (!accountForm || !state.activeClientId) {
+        return;
+      }
+
+      if (accountFormSubmit) accountFormSubmit.disabled = true;
+      try {
+        const tipo = String(clientAccountFormFields.tipo?.value || "BANCARIA").trim() || "BANCARIA";
+        const banco = tipo === "BANCARIA" ? getSelectedAccountBank() : "";
+
+        if (tipo === "BANCARIA" && !banco) {
+          throw new Error("Selecione um banco ou escolha Outro para digitar.");
+        }
+
+        const payload = {
+          cliente: state.activeClientId,
+          tipo,
+          apelido: String(clientAccountFormFields.apelido?.value || "").trim(),
+          banco,
+          agencia: String(clientAccountFormFields.agencia?.value || "").trim(),
+          numero: String(clientAccountFormFields.numero?.value || "").trim(),
+          codigo_contabil: String(clientAccountFormFields.codigo_contabil?.value || "").trim(),
+          descricao_contabil: String(clientAccountFormFields.descricao_contabil?.value || "").trim(),
+          observacoes: String(clientAccountFormFields.observacoes?.value || "").trim(),
+        };
+
+        const path = state.accountEditingId ? `/contas-clientes/${state.accountEditingId}/` : "/contas-clientes/";
+        await apiRequest(session, path, {
+          method: state.accountEditingId ? "PATCH" : "POST",
+          body: payload,
+        });
+
+        state.accountEditingId = null;
+        resetAccountForm();
+        await loadClientRelations(state.activeClientId, { includeCertificate: false });
+        if (accountHint) accountHint.textContent = "Conta salva com sucesso.";
+      } catch (error) {
+        if (accountHint) accountHint.textContent = error?.message || "Falha ao salvar a conta.";
+        logError("Falha ao salvar conta vinculada.", error);
+      } finally {
+        if (accountFormSubmit) accountFormSubmit.disabled = !isClientReadOnlyMode() || !state.activeClientId;
+      }
+    }
+
+    async function toggleAccountStatus(accountId, active) {
+      if (!accountId) {
+        return;
+      }
+
+      try {
+        await apiRequest(session, `/contas-clientes/${accountId}/`, {
+          method: "PATCH",
+          body: { ativo: active },
+        });
+        await loadClientRelations(state.activeClientId, { includeCertificate: false });
+      } catch (error) {
+        logError("Falha ao atualizar o status da conta.", error);
+      }
+    }
+
+    async function submitCertificate() {
+      if (!state.activeClientId || !certificateInput) {
+        return;
+      }
+
+      const file = Array.from(certificateInput.files || [])[0];
+      if (!file) {
+        if (certificateStatus) certificateStatus.textContent = "Selecione um arquivo.";
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append("cliente", state.activeClientId);
+      formData.append("arquivo", file);
+
+      if (certificateSubmit) certificateSubmit.disabled = true;
+
+      try {
+        const path = state.certificate?.id ? `/certificados-clientes/${state.certificate.id}/` : "/certificados-clientes/";
+        const method = state.certificate?.id ? "PATCH" : "POST";
+        const saved = await apiRequest(session, path, {
+          method,
+          body: formData,
+        });
+
+        state.certificate = saved;
+        certificateInput.value = "";
+        renderCertificate();
+        if (certificateStatus) certificateStatus.textContent = "Certificado salvo com sucesso.";
+      } catch (error) {
+        if (certificateStatus) certificateStatus.textContent = error?.message || "Falha ao enviar o certificado.";
+        logError("Falha ao enviar certificado digital.", error);
+      } finally {
+        if (certificateSubmit) {
+          const certificateMode = state.activeClientMode === "view" || state.activeClientMode === "edit";
+          certificateSubmit.disabled = !certificateMode || !state.activeClientId;
+        }
+      }
+    }
+
+    async function removeCertificate() {
+      if (!state.certificate?.id) {
+        return;
+      }
+
+      if (!window.confirm("Remover este certificado digital?")) {
+        return;
+      }
+
+      try {
+        await apiRequest(session, `/certificados-clientes/${state.certificate.id}/`, { method: "DELETE" });
+        state.certificate = null;
+        if (certificateInput) certificateInput.value = "";
+        renderCertificate();
+      } catch (error) {
+        logError("Falha ao remover certificado digital.", error);
+      }
+    }
+
+    if (accountNewButton) {
+      accountNewButton.addEventListener("click", () => openAccountForm());
+    }
+
+    if (accountFormCancel) {
+      accountFormCancel.addEventListener("click", () => {
+        resetAccountForm();
+      });
+    }
+
+    if (modalQuickEdit) {
+      modalQuickEdit.addEventListener("click", () => {
+        const client = getActiveClientRecord();
+        if (client) {
+          openModal(client, "edit");
+        }
+      });
+    }
+
+    if (modalQuickToggle) {
+      modalQuickToggle.addEventListener("click", () => {
+        toggleClientStatus();
+      });
+    }
+
+    if (accountType) {
+      accountType.addEventListener("change", syncAccountTypeFields);
+    }
+
+    if (clientAccountFormFields.bankSelect) {
+      clientAccountFormFields.bankSelect.addEventListener("change", syncAccountBankField);
+    }
+
+    if (clientAccountFormFields.banco) {
+      clientAccountFormFields.banco.addEventListener("input", () => {
+        if (clientAccountFormFields.bankSelect?.value === ACCOUNT_BANK_OTHER_VALUE) {
+          lastCustomBankValue = String(clientAccountFormFields.banco.value || "").trim();
+        }
+      });
+    }
+
+    if (accountForm) {
+      accountForm.addEventListener("submit", (event) => {
+        event.preventDefault();
+        saveAccount();
+      });
+    }
+
+    if (accountList) {
+      accountList.addEventListener("click", (event) => {
+        const editButton = event.target.closest("[data-client-account-edit]");
+        const toggleButton = event.target.closest("[data-client-account-toggle]");
+        const item = event.target.closest("[data-client-account-id]");
+        if (!item) {
+          return;
+        }
+
+        const account = state.accounts.find((record) => String(record?.id || "") === item.dataset.clientAccountId);
+        if (!account) {
+          return;
+        }
+
+        if (editButton) {
+          openAccountForm(account);
+          return;
+        }
+
+        if (toggleButton) {
+          toggleAccountStatus(account.id, !account.ativo);
+        }
+      });
+    }
+
+    if (certificateInput) {
+      certificateInput.addEventListener("change", () => {
+        const [file] = Array.from(certificateInput.files || []);
+        if (!file) {
+          if (certificateStatus) certificateStatus.textContent = state.certificate ? "Certificado pronto para substituição." : "Selecione um arquivo.";
+          return;
+        }
+
+        if (certificateStatus) {
+          certificateStatus.textContent = `Arquivo selecionado: ${file.name}`;
+        }
+      });
+    }
+
+    if (certificateSubmit) {
+      certificateSubmit.addEventListener("click", submitCertificate);
+    }
+
+    if (certificateClear) {
+      certificateClear.addEventListener("click", () => {
+        if (certificateInput) {
+          certificateInput.value = "";
+        }
+        if (certificateStatus) {
+          certificateStatus.textContent = state.certificate ? "Certificado pronto para substituição." : "Selecione um arquivo.";
+        }
+      });
+    }
+
+    if (certificateDelete) {
+      certificateDelete.addEventListener("click", removeCertificate);
+    }
+
+    function setClientFilterMenuOpen(isOpen) {
+      if (filterMenu) {
+        filterMenu.hidden = !isOpen;
+      }
+
+      if (filterRoot) {
+        filterRoot.classList.toggle("is-open", Boolean(isOpen));
+      }
+
+      if (filterToggle) {
+        filterToggle.setAttribute("aria-expanded", String(Boolean(isOpen)));
+      }
+    }
+
+    function syncClientFilterControls() {
+      const label = getClientStatusFilterLabel(state.statusFilter);
+
+      if (filterLabel) {
+        filterLabel.textContent = label;
+      }
+
+      if (filterToggle) {
+        filterToggle.setAttribute("aria-label", `Filtro de clientes: ${label}`);
+        filterToggle.classList.toggle("is-filtered", state.statusFilter !== "all");
+      }
+
+      filterOptions.forEach((option) => {
+        const isActive = option.dataset.clientFilterOption === state.statusFilter;
+        option.classList.toggle("is-active", isActive);
+        option.setAttribute("aria-pressed", String(isActive));
+      });
+    }
+
+    function setClientFilter(filterKey, { render = true, closeMenu = true } = {}) {
+      const nextFilter = Object.prototype.hasOwnProperty.call(CLIENT_STATUS_FILTERS, filterKey) ? filterKey : "all";
+      state.statusFilter = nextFilter;
+      syncClientFilterControls();
+
+      if (closeMenu) {
+        setClientFilterMenuOpen(false);
+      }
+
+      if (render) {
+        renderState();
+      }
+    }
+
+    function matchesClientFilter(client) {
+      if (state.statusFilter === "all") {
+        return true;
+      }
+
+      return (client.statusKey || normalizeClientStatus(client.situacao_label || client.situacao)) === state.statusFilter;
     }
 
     function switchTab(tabName) {
@@ -2260,7 +3399,12 @@ function setClientFormMode(mode) {
 
     function resetModalState() {
       state.activeClientId = null;
+      state.activeClientRecord = null;
       state.activeClientMode = "create";
+      state.accounts = [];
+      state.accountEditingId = null;
+      state.certificate = null;
+      state.certificateLoading = false;
       form.reset();
       if (modalTitle) {
         modalTitle.textContent = "Novo cliente";
@@ -2275,14 +3419,32 @@ function setClientFormMode(mode) {
         form.elements.situacao.value = "ATIVO";
       }
       setClientFormMode("create");
+      resetAccountForm();
+      if (certificateInput) {
+        certificateInput.value = "";
+      }
+      if (certificateDelete) {
+        certificateDelete.hidden = true;
+      }
+      renderAccounts();
+      renderCertificate();
+      if (historicoSection) historicoSection.hidden = true;
       if (historicoList) historicoList.innerHTML = "";
       if (extratoHistoricoList) extratoHistoricoList.innerHTML = "";
       switchTab("dados");
     }
 
     function openModal(record = null, mode = "create") {
+      const normalizedRecord = record ? normalizeClientRecord(record) : null;
+      const readOnlyMode = isClientReadOnlyMode(mode);
+
       state.activeClientId = record?.id || null;
+      state.activeClientRecord = normalizedRecord;
       state.activeClientMode = mode;
+      state.accounts = [];
+      state.certificate = null;
+      state.certificateLoading = Boolean(record?.id && (mode === "view" || mode === "edit" || mode === "accounts"));
+      state.accountEditingId = null;
       form.reset();
 
       if (record) {
@@ -2301,34 +3463,70 @@ function setClientFormMode(mode) {
         form.elements.codigo.value = record?.codigo || "";
       }
 
-      const titleMap = { view: record?.nome || "Cliente", edit: record?.nome || "Editar cliente", create: "Novo cliente" };
-      const eyebrowMap = { view: "VISUALIZAR", edit: "EDITAR CLIENTE", create: "NOVO CLIENTE" };
-      if (modalTitle) modalTitle.textContent = titleMap[mode] || "Novo cliente";
-      if (eyebrow) eyebrow.textContent = eyebrowMap[mode] || "CLIENTE";
+      if (modalTitle) {
+        modalTitle.textContent = readOnlyMode && normalizedRecord
+          ? normalizedRecord.nome || "Cliente"
+          : mode === "edit"
+            ? "Editar cliente"
+            : "Novo cliente";
+      }
+      if (eyebrow) {
+        const eyebrowMap = { view: "VISUALIZAR", accounts: "BANCOS E CONTAS", edit: "EDITAR CLIENTE", create: "NOVO CLIENTE" };
+        eyebrow.textContent = eyebrowMap[mode] || "CLIENTE";
+      }
 
       setClientFormMode(mode);
+      renderClientBasicSummary(mode === "accounts" ? normalizedRecord : null);
+      resetAccountForm();
+      if (certificateInput) {
+        certificateInput.value = "";
+      }
 
-      // Abas de regras/extratos só visíveis no modo view
-      const showTabs = mode === "view" && !!record?.id;
+      const showTabs = tabButtons.length > 0 && mode === "view" && !!record?.id;
       if (tabRegras) tabRegras.hidden = !showTabs;
       if (tabExtratos) tabExtratos.hidden = !showTabs;
 
-      // Pré-carrega dados se modo view
       if (showTabs) {
         loadClientHistorico(record.id);
         loadExtratoHistorico(record.id);
+      } else if (historicoSection) {
+        historicoSection.hidden = true;
       }
 
       // Volta para a aba Dados sempre que abre
       switchTab("dados");
 
-      // Mostra painel de detalhe, oculta summary
       if (summaryPanel) summaryPanel.hidden = true;
-      modal.hidden = false;
+      if (typeof modal.showModal === "function") {
+        modal.showModal();
+      } else {
+        modal.setAttribute("open", "open");
+      }
+
+      if (record?.id && mode === "accounts") {
+        loadClientRelations(record.id, { includeAccounts: true, includeCertificate: false });
+      } else if (record?.id && (mode === "view" || mode === "edit")) {
+        loadClientRelations(record.id, { includeAccounts: false, includeCertificate: true });
+      } else {
+        state.accounts = [];
+        state.certificate = null;
+        renderAccounts();
+        renderCertificate();
+      }
 
       window.requestAnimationFrame(() => {
+        if (mode === "accounts" && accountNewButton && typeof accountNewButton.focus === "function") {
+          accountNewButton.focus();
+          return;
+        }
+
+        if (readOnlyMode && modalQuickEdit && typeof modalQuickEdit.focus === "function") {
+          modalQuickEdit.focus();
+          return;
+        }
+
         const firstField = form.elements.nome || form.elements.codigo;
-        if (firstField && typeof firstField.focus === "function") {
+        if (!readOnlyMode && firstField && typeof firstField.focus === "function") {
           firstField.focus();
         }
       });
@@ -2455,7 +3653,11 @@ function setClientFormMode(mode) {
     }
 
     function closeModal() {
-      modal.hidden = true;
+      if (typeof modal.close === "function" && modal.open) {
+        modal.close();
+      } else {
+        modal.removeAttribute("open");
+      }
       if (summaryPanel) summaryPanel.hidden = false;
       resetModalState();
       panel.querySelectorAll("[data-client-item].is-selected").forEach((el) => el.classList.remove("is-selected"));
@@ -2463,14 +3665,17 @@ function setClientFormMode(mode) {
 
     function renderState() {
       const query = normalizeSearchTerm(searchInput?.value || "");
-      const visibleClients = query
-        ? state.clients.filter((client) => client.searchIndex.includes(query))
-        : state.clients;
+      const visibleClients = state.clients.filter((client) => {
+        const matchesSearch = !query || client.searchIndex.includes(query);
+        const matchesFilter = matchesClientFilter(client);
+        return matchesSearch && matchesFilter;
+      });
+      const hasStatusFilter = state.statusFilter !== "all";
 
       list.replaceChildren(...visibleClients.map(createClientCard));
 
       if (countLabel) {
-        countLabel.textContent = query && state.clients.length > 0
+        countLabel.textContent = (query || hasStatusFilter) && state.clients.length > 0
           ? `Mostrando ${visibleClients.length} de ${state.clients.length} clientes`
           : formatClientCount(state.clients.length);
       }
@@ -2491,7 +3696,15 @@ function setClientFormMode(mode) {
           emptyState.textContent = "Nenhum cliente cadastrado ainda. Clique em 'Novo cliente' para começar.";
         } else if (visibleClients.length === 0) {
           emptyState.hidden = false;
-          emptyState.textContent = "Nenhum cliente encontrado para essa pesquisa.";
+          if (query && hasStatusFilter) {
+            emptyState.textContent = "Nenhum cliente encontrado para essa pesquisa e o filtro selecionado.";
+          } else if (query) {
+            emptyState.textContent = "Nenhum cliente encontrado para essa pesquisa.";
+          } else if (hasStatusFilter) {
+            emptyState.textContent = `Nenhum cliente encontrado para o filtro ${getClientStatusFilterLabel(state.statusFilter).toLowerCase()}.`;
+          } else {
+            emptyState.textContent = "Nenhum cliente encontrado.";
+          }
         } else {
           emptyState.hidden = true;
         }
@@ -2556,8 +3769,45 @@ function setClientFormMode(mode) {
       searchInput.addEventListener("input", renderState);
     }
 
+    if (filterToggle) {
+      filterToggle.addEventListener("click", () => {
+        const shouldOpen = filterMenu ? filterMenu.hidden : false;
+        setClientFilterMenuOpen(shouldOpen);
+      });
+    }
+
+    filterOptions.forEach((option) => {
+      option.addEventListener("click", () => {
+        setClientFilter(option.dataset.clientFilterOption || "all");
+      });
+    });
+
+    document.addEventListener("click", (event) => {
+      if (!filterRoot || filterRoot.contains(event.target)) {
+        return;
+      }
+
+      setClientFilterMenuOpen(false);
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        setClientFilterMenuOpen(false);
+      }
+    });
+
+    syncClientFilterControls();
+    setClientFilterMenuOpen(false);
+
+    modal.addEventListener("close", resetModalState);
+    modal.addEventListener("click", (event) => {
+      if (event.target === modal) {
+        closeModal();
+      }
+    });
     list.addEventListener("click", (event) => {
       const viewButton = event.target.closest("[data-client-view]");
+      const accountsButton = event.target.closest("[data-client-accounts]");
       const editButton = event.target.closest("[data-client-edit]");
       const deleteButton = event.target.closest("[data-client-delete]");
 
@@ -2572,6 +3822,19 @@ function setClientFormMode(mode) {
           panel.querySelectorAll("[data-client-item].is-selected").forEach((el) => el.classList.remove("is-selected"));
           clientItem.classList.add("is-selected");
           openModal(record, "view");
+        }
+        return;
+      }
+
+      if (accountsButton) {
+        const clientItem = accountsButton.closest("[data-client-item]");
+        if (!clientItem) {
+          return;
+        }
+
+        const record = state.clients.find((client) => client.id === clientItem.dataset.clientId);
+        if (record) {
+          openModal(record, "accounts");
         }
         return;
       }
@@ -4412,19 +5675,17 @@ function setClientFormMode(mode) {
   }
 
   async function exchangeCodeForToken({ code, verifier, redirectUri }) {
-    logInfo("Trocando authorization code por tokens.", { redirectUri });
+    logInfo("Trocando authorization code por tokens via backend.", { redirectUri });
     try {
-      const response = await fetch(authEndpoint("token"), {
+      const response = await fetch(apiUrl("/auth/keycloak/token/"), {
         method: "POST",
         headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
+          "Content-Type": "application/json",
         },
-        body: new URLSearchParams({
-          grant_type: "authorization_code",
-          client_id: CONFIG.keycloak.clientId,
+        body: JSON.stringify({
           code,
+          verifier,
           redirect_uri: redirectUri,
-          code_verifier: verifier,
         }),
       });
 
@@ -4443,7 +5704,7 @@ function setClientFormMode(mode) {
       return payload;
     } catch (error) {
       logError("Falha ao buscar tokens no Keycloak.", {
-        endpoint: authEndpoint("token"),
+        endpoint: apiUrl("/auth/keycloak/token/"),
         redirectUri,
         name: error?.name,
         message: error?.message,
@@ -4683,9 +5944,10 @@ function setClientFormMode(mode) {
     const loginButton = document.getElementById("loginButton");
     const loginStatus = document.getElementById("loginStatus");
     const reason = new URLSearchParams(window.location.search).get("reason");
+    const detail = new URLSearchParams(window.location.search).get("detail");
     const messages = {
       forbidden: "Sua conta não possui a role USER-GM.",
-      token_exchange_failed: "Não foi possível obter o JWT do Keycloak. Verifique Web Origins/CORS.",
+      token_exchange_failed: "Não foi possível obter o JWT do Keycloak. Verifique a configuração do Keycloak.",
       auth_failed: "Falha na autenticação com Keycloak.",
     };
     const deniedMessage = messages[reason] || "";
@@ -4708,9 +5970,9 @@ function setClientFormMode(mode) {
         return;
       }
 
-      updateText(loginStatus, deniedMessage || "Clique em Entrar com SSO para autenticar via Keycloak.");
+      updateText(loginStatus, detail || deniedMessage || "Clique em Entrar com SSO para autenticar via Keycloak.");
     } catch (_error) {
-      updateText(loginStatus, "Não foi possível validar a sessão agora. Tente novamente.");
+      updateText(loginStatus, detail || "Não foi possível validar a sessão agora. Tente novamente.");
     }
 
     if (loginButton) {
@@ -4727,8 +5989,10 @@ function setClientFormMode(mode) {
 
     logInfo("Abrindo painel.", { href: window.location.href });
 
+    let session;
+
     try {
-      const session = await ensureSession({ interactive: false, redirectUri: buildUrl(CONFIG.pages.panel) });
+      session = await ensureSession({ interactive: false, redirectUri: buildUrl(CONFIG.pages.panel) });
       if (!session) {
         logWarn("Sem sessão no painel. Voltando ao login.");
         redirectToLogin();
@@ -4741,21 +6005,38 @@ function setClientFormMode(mode) {
       }
 
       logInfo("Sessão autorizada para o painel.", summarizeSession(session));
-
-      setupPanelNavigation();
-      setupClientsCrud(session);
-      setupPerfisCrud(session);
-      setupExtratoImport(session);
-      setupConciliadorDraft();
-      setPanelView(getInitialPanelView(), { updateUrl: false });
       updatePanelWithSession(session);
       document.body.classList.add("panel-ready");
       await testProtectedEndpoint(session);
+    } catch (error) {
+      logError("Falha na autenticação do painel.", error);
+      clearAppState();
+      redirectToLogin("token_exchange_failed", error?.message || "Falha na autenticação com Keycloak.");
+      return;
+    }
+
+    const setupErrors = [];
+    const runPanelSetup = (label, setup) => {
+      try {
+        setup();
+      } catch (error) {
+        setupErrors.push({ label, error });
+        logError(`Falha ao inicializar ${label}.`, error);
+      }
+    };
+
+    try {
+      runPanelSetup("navegação", setupPanelNavigation);
+      runPanelSetup("clientes", () => setupClientsCrud(session));
+      runPanelSetup("perfis", () => setupPerfisCrud(session));
+      runPanelSetup("extrato", () => setupExtratoImport(session));
+      runPanelSetup("rascunho do conciliador", setupConciliadorDraft);
+      setPanelView(getInitialPanelView(), { updateUrl: false });
 
       if (sessionStatus) {
-        sessionStatus.textContent = session.roles.includes(CONFIG.keycloak.requiredRole)
-          ? "USER-GM OK"
-          : "SEM USER-GM";
+        sessionStatus.textContent = setupErrors.length
+          ? `USER-GM OK · ${setupErrors.length} módulo(s) com erro`
+          : (session.roles.includes(CONFIG.keycloak.requiredRole) ? "USER-GM OK" : "SEM USER-GM");
       }
 
       if (logoutButton) {
@@ -4764,10 +6045,11 @@ function setClientFormMode(mode) {
           await logout(session);
         });
       }
-    } catch (_error) {
-      logError("Falha ao abrir o painel.", _error);
-      clearAppState();
-      redirectToLogin("token_exchange_failed");
+    } catch (error) {
+      logError("Falha ao inicializar a interface do painel.", error);
+      if (sessionStatus) {
+        sessionStatus.textContent = "Painel autenticado, mas houve erro ao carregar a interface.";
+      }
     }
   }
 

@@ -1,4 +1,3 @@
-import json
 import logging
 
 from rest_framework.authentication import BaseAuthentication, get_authorization_header
@@ -48,16 +47,6 @@ class KeycloakJWTAuthentication(BaseAuthentication):
             logger.warning("Falha na validação do JWT path=%s erro=%s", request.path, exc)
             raise AuthenticationFailed(str(exc)) from exc
 
-        logger.info(
-            "JWT bruto path=%s token=%s",
-            request.path,
-            token,
-        )
-        logger.info(
-            "JWT claims path=%s claims=%s",
-            request.path,
-            json.dumps(claims, ensure_ascii=False, indent=2, sort_keys=True),
-        )
         logger.info(
             "JWT validado com sucesso path=%s user=%s realm_roles=%s client_roles=%s",
             request.path,

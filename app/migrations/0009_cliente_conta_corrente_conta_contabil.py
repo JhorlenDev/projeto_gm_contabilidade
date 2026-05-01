@@ -3,6 +3,39 @@
 from django.db import migrations, models
 
 
+def _rename_index_if_needed(schema_editor, old_name, new_name):
+    table_name = "app_perfilconciliacao"
+    with schema_editor.connection.cursor() as cursor:
+        constraints = schema_editor.connection.introspection.get_constraints(cursor, table_name)
+
+    if new_name in constraints or old_name not in constraints:
+        return
+
+    schema_editor.execute(
+        schema_editor.sql_rename_index
+        % {
+            "old_name": schema_editor.quote_name(old_name),
+            "new_name": schema_editor.quote_name(new_name),
+        }
+    )
+
+
+def rename_escritorio_index(apps, schema_editor):
+    _rename_index_if_needed(schema_editor, "app_perfilc_escritor_idx", "app_perfilc_escrito_fc491a_idx")
+
+
+def reverse_escritorio_index(apps, schema_editor):
+    _rename_index_if_needed(schema_editor, "app_perfilc_escrito_fc491a_idx", "app_perfilc_escritor_idx")
+
+
+def rename_empresa_index(apps, schema_editor):
+    _rename_index_if_needed(schema_editor, "app_perfilc_empresa_idx", "app_perfilc_empresa_8bd48b_idx")
+
+
+def reverse_empresa_index(apps, schema_editor):
+    _rename_index_if_needed(schema_editor, "app_perfilc_empresa_8bd48b_idx", "app_perfilc_empresa_idx")
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -10,15 +43,29 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.RenameIndex(
-            model_name='perfilconciliacao',
-            new_name='app_perfilc_escrito_fc491a_idx',
-            old_name='app_perfilc_escritor_idx',
+        migrations.SeparateDatabaseAndState(
+            database_operations=[
+                migrations.RunPython(rename_escritorio_index, reverse_escritorio_index),
+            ],
+            state_operations=[
+                migrations.RenameIndex(
+                    model_name='perfilconciliacao',
+                    new_name='app_perfilc_escrito_fc491a_idx',
+                    old_name='app_perfilc_escritor_idx',
+                ),
+            ],
         ),
-        migrations.RenameIndex(
-            model_name='perfilconciliacao',
-            new_name='app_perfilc_empresa_8bd48b_idx',
-            old_name='app_perfilc_empresa_idx',
+        migrations.SeparateDatabaseAndState(
+            database_operations=[
+                migrations.RunPython(rename_empresa_index, reverse_empresa_index),
+            ],
+            state_operations=[
+                migrations.RenameIndex(
+                    model_name='perfilconciliacao',
+                    new_name='app_perfilc_empresa_8bd48b_idx',
+                    old_name='app_perfilc_empresa_idx',
+                ),
+            ],
         ),
         migrations.AddField(
             model_name='cliente',
