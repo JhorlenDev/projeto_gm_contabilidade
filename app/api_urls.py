@@ -9,9 +9,11 @@ from .api_views import (
     EscritorioViewSet,
     ExtratoHistoricoView,
     ExtratoPreviewView,
+    HistoricoContabilView,
     ImportacaoExtratoViewSet,
     KeycloakTokenExchangeView,
     PerfilConciliacaoViewSet,
+    PlanoContasView,
     RegraConciliadorViewSet,
     TransacaoImportadaViewSet,
 )
@@ -35,5 +37,9 @@ urlpatterns = [
     path("comprovante-preview/", ComprovantePreviw.as_view(), name="comprovante-preview"),
     path("extrato-historico/", ExtratoHistoricoView.as_view(), name="extrato-historico"),
     path("extrato-historico/<uuid:pk>/", ExtratoHistoricoView.as_view(), name="extrato-historico-delete"),
+    path("plano-contas/", PlanoContasView.as_view(), name="plano-contas"),
+    path("plano-contas/<uuid:pk>/", PlanoContasView.as_view(), name="plano-contas-detail"),
+    path("historico-contabil/", HistoricoContabilView.as_view(), name="historico-contabil"),
+    path("historico-contabil/<uuid:pk>/", HistoricoContabilView.as_view(), name="historico-contabil-detail"),
     path("teste/", TesteView.as_view(), name="teste"),
 ]

@@ -127,10 +127,7 @@ class ContaCliente(models.Model):
         self.descricao_contabil = str(self.descricao_contabil or "").strip()
         self.observacoes = str(self.observacoes or "").strip()
 
-        if self.tipo == TipoContaCliente.BANCARIA:
-            self.codigo_contabil = ""
-            self.descricao_contabil = ""
-        elif self.tipo == TipoContaCliente.CONTABIL:
+        if self.tipo == TipoContaCliente.CONTABIL:
             self.banco = ""
             self.agencia = ""
             self.numero = ""
@@ -160,7 +157,10 @@ class ContaCliente(models.Model):
         if self.tipo == TipoContaCliente.BANCARIA:
             partes = [self.banco, f"Ag. {self.agencia}" if self.agencia else "", f"Conta {self.numero}" if self.numero else ""]
             partes = [parte for parte in partes if parte]
-            return " · ".join(partes) or self.apelido or "Conta bancária"
+            base = " · ".join(partes) or self.apelido or "Conta bancária"
+            if self.codigo_contabil:
+                base += f" [{self.codigo_contabil}]"
+            return base
 
         partes = [self.codigo_contabil, self.descricao_contabil]
         partes = [parte for parte in partes if parte]
@@ -387,6 +387,44 @@ class PerfilConciliacao(models.Model):
 
     def __str__(self):
         return self.nome
+
+
+class PlanoContas(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    escritorio = models.ForeignKey(Escritorio, on_delete=models.PROTECT, related_name="plano_contas")
+    codigo = models.CharField(max_length=20, db_index=True)
+    classificacao = models.CharField(max_length=60, blank=True, default="")
+    nome = models.CharField(max_length=255)
+    tipo = models.CharField(max_length=30, blank=True, default="")
+    natureza = models.CharField(max_length=80, blank=True, default="")
+    ativo = models.BooleanField(default=True, db_index=True)
+
+    class Meta:
+        ordering = ["codigo"]
+        indexes = [
+            models.Index(fields=["escritorio", "ativo", "codigo"]),
+        ]
+
+    def __str__(self):
+        return f"{self.codigo} — {self.nome}"
+
+
+class HistoricoContabil(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    escritorio = models.ForeignKey(Escritorio, on_delete=models.PROTECT, related_name="historicos_contabeis")
+    codigo = models.PositiveIntegerField(db_index=True)
+    nome = models.CharField(max_length=255)
+    grupo = models.CharField(max_length=120, blank=True, default="")
+    ativo = models.BooleanField(default=True, db_index=True)
+
+    class Meta:
+        ordering = ["codigo"]
+        indexes = [
+            models.Index(fields=["escritorio", "ativo", "codigo"]),
+        ]
+
+    def __str__(self):
+        return f"{self.codigo} — {self.nome}"
 
 
 class KeycloakUser(models.Model):

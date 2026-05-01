@@ -29,8 +29,10 @@ from .models import (
     ContaCliente,
     Escritorio,
     ExtratoHistorico,
+    HistoricoContabil,
     ImportacaoExtrato,
     PerfilConciliacao,
+    PlanoContas,
     RegraConciliador,
     StatusImportacao,
     TransacaoImportada,
@@ -40,8 +42,10 @@ from .serializers import (
     CertificadoDigitalClienteSerializer,
     ContaClienteSerializer,
     EscritorioSerializer,
+    HistoricoContabilSerializer,
     ImportacaoExtratoSerializer,
     PerfilConciliacaoSerializer,
+    PlanoContasSerializer,
     RegraConciliadorSerializer,
     TransacaoImportadaSerializer,
 )
@@ -605,4 +609,118 @@ class ExtratoHistoricoView(APIView):
         except ExtratoHistorico.DoesNotExist:
             return Response({"detail": "Não encontrado."}, status=status.HTTP_404_NOT_FOUND)
         h.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class PlanoContasView(APIView):
+    authentication_classes = [KeycloakJWTAuthentication]
+    permission_classes = [HasUserGMRole]
+
+    def _get_escritorio(self, request):
+        esc_id = request.query_params.get("escritorio")
+        if esc_id:
+            try:
+                return Escritorio.objects.get(pk=esc_id)
+            except Escritorio.DoesNotExist:
+                pass
+        return Escritorio.objects.first()
+
+    def get(self, request):
+        escritorio = self._get_escritorio(request)
+        if not escritorio:
+            return Response({"detail": "Escritório não encontrado."}, status=status.HTTP_404_NOT_FOUND)
+        qs = PlanoContas.objects.filter(escritorio=escritorio).order_by("codigo")
+        if not request.query_params.get("todos"):
+            qs = qs.filter(ativo=True)
+        serializer = PlanoContasSerializer(qs, many=True)
+        return Response(serializer.data)
+
+    def post(self, request):
+        escritorio = self._get_escritorio(request)
+        if not escritorio:
+            return Response({"detail": "Escritório não encontrado."}, status=status.HTTP_404_NOT_FOUND)
+        serializer = PlanoContasSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save(escritorio=escritorio)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    def patch(self, request, pk=None):
+        if not pk:
+            return Response({"detail": "ID obrigatório."}, status=status.HTTP_400_BAD_REQUEST)
+        escritorio = self._get_escritorio(request)
+        try:
+            obj = PlanoContas.objects.get(pk=pk, escritorio=escritorio)
+        except PlanoContas.DoesNotExist:
+            return Response({"detail": "Não encontrado."}, status=status.HTTP_404_NOT_FOUND)
+        serializer = PlanoContasSerializer(obj, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+    def delete(self, request, pk=None):
+        if not pk:
+            return Response({"detail": "ID obrigatório."}, status=status.HTTP_400_BAD_REQUEST)
+        escritorio = self._get_escritorio(request)
+        try:
+            obj = PlanoContas.objects.get(pk=pk, escritorio=escritorio)
+        except PlanoContas.DoesNotExist:
+            return Response({"detail": "Não encontrado."}, status=status.HTTP_404_NOT_FOUND)
+        obj.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class HistoricoContabilView(APIView):
+    authentication_classes = [KeycloakJWTAuthentication]
+    permission_classes = [HasUserGMRole]
+
+    def _get_escritorio(self, request):
+        esc_id = request.query_params.get("escritorio")
+        if esc_id:
+            try:
+                return Escritorio.objects.get(pk=esc_id)
+            except Escritorio.DoesNotExist:
+                pass
+        return Escritorio.objects.first()
+
+    def get(self, request):
+        escritorio = self._get_escritorio(request)
+        if not escritorio:
+            return Response({"detail": "Escritório não encontrado."}, status=status.HTTP_404_NOT_FOUND)
+        qs = HistoricoContabil.objects.filter(escritorio=escritorio).order_by("codigo")
+        if not request.query_params.get("todos"):
+            qs = qs.filter(ativo=True)
+        serializer = HistoricoContabilSerializer(qs, many=True)
+        return Response(serializer.data)
+
+    def post(self, request):
+        escritorio = self._get_escritorio(request)
+        if not escritorio:
+            return Response({"detail": "Escritório não encontrado."}, status=status.HTTP_404_NOT_FOUND)
+        serializer = HistoricoContabilSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save(escritorio=escritorio)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    def patch(self, request, pk=None):
+        if not pk:
+            return Response({"detail": "ID obrigatório."}, status=status.HTTP_400_BAD_REQUEST)
+        escritorio = self._get_escritorio(request)
+        try:
+            obj = HistoricoContabil.objects.get(pk=pk, escritorio=escritorio)
+        except HistoricoContabil.DoesNotExist:
+            return Response({"detail": "Não encontrado."}, status=status.HTTP_404_NOT_FOUND)
+        serializer = HistoricoContabilSerializer(obj, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+    def delete(self, request, pk=None):
+        if not pk:
+            return Response({"detail": "ID obrigatório."}, status=status.HTTP_400_BAD_REQUEST)
+        escritorio = self._get_escritorio(request)
+        try:
+            obj = HistoricoContabil.objects.get(pk=pk, escritorio=escritorio)
+        except HistoricoContabil.DoesNotExist:
+            return Response({"detail": "Não encontrado."}, status=status.HTTP_404_NOT_FOUND)
+        obj.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)

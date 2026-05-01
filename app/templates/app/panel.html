@@ -65,6 +65,13 @@
               </svg>
               Perfis
             </button>
+            <button class="menu-item" type="button" data-panel-view-target="contabilidade">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+                <path d="M14 2v6h6M8 13h8M8 17h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+              </svg>
+              Contabilidade
+            </button>
             <button class="menu-item" type="button">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                 <path d="M4 7h16M4 12h16M4 17h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
@@ -148,6 +155,8 @@
         {% include "app/section_conciliador.html" %}
 
         {% include "app/section_perfis.html" %}
+
+        {% include "app/section_contabilidade.html" %}
 
         {% include "app/section_cliente.html" %}
       </section>

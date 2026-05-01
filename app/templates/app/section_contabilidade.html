@@ -1,0 +1,171 @@
+<section class="panel-view contab-panel" data-panel-view-section="contabilidade">
+
+  <section class="contab-header">
+    <div class="contab-header-copy">
+      <h2>Contabilidade</h2>
+      <p>Gerencie o plano de contas e os históricos contábeis do escritório.</p>
+    </div>
+  </section>
+
+  <!-- Abas -->
+  <div class="contab-tabs" role="tablist">
+    <button class="contab-tab is-active" type="button" role="tab" data-contab-tab="plano" aria-selected="true">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+        <path d="M14 2v6h6M8 13h8M8 17h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+      </svg>
+      Plano de Contas
+      <span class="contab-tab-count" data-contab-count-plano>0</span>
+    </button>
+    <button class="contab-tab" type="button" role="tab" data-contab-tab="historico" aria-selected="false">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M4 6h16M4 10h16M4 14h10M4 18h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+      </svg>
+      Histórico Contábil
+      <span class="contab-tab-count" data-contab-count-historico>0</span>
+    </button>
+  </div>
+
+  <section class="content-grid content-grid--single">
+    <article class="card contab-card">
+
+      <!-- Toolbar -->
+      <div class="contab-toolbar">
+        <button class="primary contab-novo-btn" type="button" data-contab-novo>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+          </svg>
+          Novo registro
+        </button>
+        <div class="contab-search-wrap">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle cx="11" cy="11" r="8" stroke="currentColor" stroke-width="1.8"/>
+            <path d="m21 21-4.35-4.35" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+          </svg>
+          <input type="search" class="contab-search" placeholder="Pesquisar por código ou nome..." data-contab-search autocomplete="off" />
+        </div>
+        <label class="contab-inativos-toggle">
+          <input type="checkbox" data-contab-inativos />
+          <span>Mostrar inativos</span>
+        </label>
+      </div>
+
+      <!-- Tabela -->
+      <div class="contab-table-wrap">
+        <table class="contab-table" data-contab-table>
+          <thead data-contab-thead>
+            <!-- renderizado pelo JS -->
+          </thead>
+          <tbody data-contab-tbody>
+            <!-- renderizado pelo JS -->
+          </tbody>
+        </table>
+        <div class="contab-loading" data-contab-loading hidden>
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" class="spin" aria-hidden="true">
+            <circle cx="12" cy="12" r="10" stroke="#e7dbe0" stroke-width="2.5"/>
+            <path d="M12 2a10 10 0 0 1 10 10" stroke="#8b3a52" stroke-width="2.5" stroke-linecap="round"/>
+          </svg>
+          Carregando...
+        </div>
+        <div class="contab-empty" data-contab-empty hidden>Nenhum registro encontrado.</div>
+      </div>
+
+    </article>
+  </section>
+
+  <!-- Dialog de edição / criação -->
+  <dialog class="contab-dialog" data-contab-dialog aria-modal="true" aria-labelledby="contabDialogTitle">
+    <div class="contab-dialog-inner">
+
+      <div class="contab-dialog-head">
+        <div>
+          <p class="contab-dialog-label" data-contab-dialog-label>Novo registro</p>
+          <h3 id="contabDialogTitle" class="contab-dialog-title" data-contab-dialog-title>Plano de Contas</h3>
+        </div>
+        <button type="button" class="contab-dialog-close" data-contab-dialog-close aria-label="Fechar">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M18 6L6 18M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+
+      <form class="contab-form" data-contab-form novalidate>
+
+        <!-- Campos Plano de Contas -->
+        <div data-contab-fields="plano">
+          <div class="contab-form-row contab-form-row--2">
+            <label class="contab-field">
+              <span>Código <em>*</em></span>
+              <input type="text" name="codigo" placeholder="Ex: 1.1.01" autocomplete="off" required />
+            </label>
+            <label class="contab-field">
+              <span>Classificação</span>
+              <input type="text" name="classificacao" placeholder="Ex: ATIVO CIRCULANTE" autocomplete="off" />
+            </label>
+          </div>
+          <div class="contab-form-row">
+            <label class="contab-field">
+              <span>Nome <em>*</em></span>
+              <input type="text" name="nome" placeholder="Ex: Caixa e Equivalentes de Caixa" autocomplete="off" required />
+            </label>
+          </div>
+          <div class="contab-form-row contab-form-row--2">
+            <label class="contab-field">
+              <span>Tipo</span>
+              <input type="text" name="tipo" placeholder="Ex: Analítica" autocomplete="off" />
+            </label>
+            <label class="contab-field">
+              <span>Natureza</span>
+              <input type="text" name="natureza" placeholder="Ex: DEVEDORA" autocomplete="off" />
+            </label>
+          </div>
+          <label class="contab-field contab-field--check">
+            <input type="checkbox" name="ativo" checked />
+            <span>Ativo</span>
+          </label>
+        </div>
+
+        <!-- Campos Histórico Contábil -->
+        <div data-contab-fields="historico" hidden>
+          <div class="contab-form-row contab-form-row--2">
+            <label class="contab-field">
+              <span>Código <em>*</em></span>
+              <input type="number" name="codigo_historico" placeholder="Ex: 1" min="1" autocomplete="off" required />
+            </label>
+            <label class="contab-field">
+              <span>Grupo</span>
+              <input type="text" name="grupo" placeholder="Ex: RECEITAS" autocomplete="off" />
+            </label>
+          </div>
+          <div class="contab-form-row">
+            <label class="contab-field">
+              <span>Nome <em>*</em></span>
+              <input type="text" name="nome_historico" placeholder="Ex: Recebimento de clientes" autocomplete="off" required />
+            </label>
+          </div>
+          <label class="contab-field contab-field--check">
+            <input type="checkbox" name="ativo_historico" checked />
+            <span>Ativo</span>
+          </label>
+        </div>
+
+        <div class="contab-form-footer">
+          <p class="contab-form-error" data-contab-form-error hidden></p>
+          <div class="contab-form-actions">
+            <button type="button" class="secondary" data-contab-dialog-cancel>Cancelar</button>
+            <button type="submit" class="primary" data-contab-form-submit>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                <polyline points="17 21 17 13 7 13 7 21"/>
+                <polyline points="7 3 7 8 15 8"/>
+              </svg>
+              Salvar
+            </button>
+          </div>
+        </div>
+
+      </form>
+    </div>
+  </dialog>
+
+</section>

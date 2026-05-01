@@ -1895,27 +1895,91 @@ body[data-page="panel"] .client-account-form-grid textarea:focus-visible {
 
 body[data-page="panel"] .client-account-section {
   grid-column: 1 / -1;
-  display: none;
-}
-
-body[data-page="panel"] .client-account-section.is-active {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-
-body[data-page="panel"] .client-account-section[data-account-fields="bancaria"].is-active {
   grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-@media (max-width: 760px) {
-  body[data-page="panel"] .client-basic-grid {
-    grid-template-columns: 1fr;
-  }
+  gap: 12px;
 }
 
 body[data-page="panel"] .client-account-full {
   grid-column: 1 / -1;
+}
+
+/* ── Código contábil com badge de validação ─────────────────────────── */
+body[data-page="panel"] .client-account-contabil-hint {
+  font-weight: 400;
+  color: #999;
+  font-size: 0.82rem;
+}
+
+body[data-page="panel"] .client-account-contabil-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+body[data-page="panel"] .client-account-contabil-wrap input {
+  flex: 1;
+  padding-right: 36px;
+}
+
+body[data-page="panel"] .client-account-contabil-badge {
+  position: absolute;
+  right: 10px;
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1;
+  pointer-events: none;
+  user-select: none;
+}
+
+body[data-page="panel"] .client-account-contabil-badge.is-valid {
+  color: #16a34a;
+}
+
+body[data-page="panel"] .client-account-contabil-badge.is-invalid {
+  color: #dc2626;
+  font-size: 0.9rem;
+}
+
+/* ── Combobox com busca ─────────────────────────────────────────────── */
+body[data-page="panel"] .combobox-wrap {
+  position: relative;
+  display: block;
+  flex: 1;
+}
+body[data-page="panel"] .combobox-wrap input {
+  width: 100%;
+}
+body[data-page="panel"] .combobox-dropdown {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  right: 0;
+  background: #fff;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.13);
+  max-height: 220px;
+  overflow-y: auto;
+  z-index: 9999;
+}
+body[data-page="panel"] .combobox-option {
+  padding: 7px 12px;
+  cursor: pointer;
+  font-size: 0.82rem;
+  color: #374151;
+  border-bottom: 1px solid #f3f4f6;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+body[data-page="panel"] .combobox-option:last-child {
+  border-bottom: none;
+}
+body[data-page="panel"] .combobox-option:hover,
+body[data-page="panel"] .combobox-option.is-active {
+  background: #eff6ff;
+  color: #1d4ed8;
 }
 
 body[data-page="panel"] .client-certificate-card {
@@ -4033,48 +4097,98 @@ body[data-page="panel"] .extrato-total--saldo strong {
 
 body[data-page="panel"] .detalhe-dialog {
   position: fixed;
-  inset: 0 0 0 auto;
-  width: min(480px, 100vw);
-  height: 100dvh;
-  margin: 0;
+  inset: 0;
+  margin: auto;
+  width: min(1020px, 96vw);
+  max-height: 92dvh;
+  height: auto;
   padding: 0;
   border: none;
-  border-left: 1px solid #ead8df;
-  border-radius: 24px 0 0 24px;
+  border-radius: 20px;
   background: #fff;
-  box-shadow: -8px 0 40px rgba(0,0,0,0.13);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  animation: detalhe-slide-in 0.22s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  box-shadow: 0 32px 80px rgba(0,0,0,0.22), 0 4px 20px rgba(0,0,0,0.1);
+  overflow: hidden;
+  animation: detalhe-fade-in 0.22s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+body[data-page="panel"] .detalhe-dialog[open] {
+  display: flex;
+  flex-direction: column;
 }
 
 body[data-page="panel"] .detalhe-dialog::backdrop {
-  background: rgba(30,20,25,0.35);
-  backdrop-filter: blur(2px);
+  background: rgba(20,14,18,0.52);
+  backdrop-filter: blur(3px);
 }
 
-@keyframes detalhe-slide-in {
-  from { transform: translateX(100%); }
-  to   { transform: translateX(0); }
+@keyframes detalhe-fade-in {
+  from { opacity: 0; transform: scale(0.97) translateY(10px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
 }
 
 body[data-page="panel"] .detalhe-dialog-inner {
   display: flex;
   flex-direction: column;
-  gap: 20px;
-  padding: 24px;
-  min-height: 100%;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
 }
 
 body[data-page="panel"] .detalhe-dialog-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
+  gap: 16px;
+  padding: 28px 36px 22px;
+  border-bottom: 1px solid #f0dfe5;
+  background: #fffbfc;
+  flex-shrink: 0;
+}
+
+body[data-page="panel"] .detalhe-dialog-body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+body[data-page="panel"] .detalhe-dialog-col {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 26px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+body[data-page="panel"] .detalhe-dialog-col--left {
+  border-right: 1px solid #f0dfe5;
+}
+
+@media (max-width: 700px) {
+  body[data-page="panel"] .detalhe-dialog {
+    width: 100vw;
+    max-height: 100dvh;
+    border-radius: 0;
+    inset: 0;
+    margin: 0;
+  }
+  body[data-page="panel"] .detalhe-dialog-body {
+    grid-template-columns: 1fr;
+    overflow-y: auto;
+  }
+  body[data-page="panel"] .detalhe-dialog-col {
+    overflow-y: visible;
+  }
+  body[data-page="panel"] .detalhe-dialog-col--left {
+    border-right: none;
+    border-bottom: 1px solid #f0dfe5;
+  }
 }
 
 body[data-page="panel"] .detalhe-dialog-label {
-  font-size: 0.76rem;
+  font-size: 0.85rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.07em;
@@ -4099,7 +4213,7 @@ body[data-page="panel"] .detalhe-dialog-hist--edit {
   padding: 4px 0;
   outline: none;
   font-family: inherit;
-  font-size: 1.15rem;
+  font-size: 1.35rem;
   font-weight: 700;
   color: #1e1820;
   line-height: 1.4;
@@ -4115,8 +4229,8 @@ body[data-page="panel"] .detalhe-dialog-close {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
+  width: 42px;
+  height: 42px;
   border-radius: 50%;
   border: 1px solid #e7dbe0;
   background: transparent;
@@ -4134,8 +4248,8 @@ body[data-page="panel"] .detalhe-dialog-close:hover {
 body[data-page="panel"] .detalhe-resumo {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 10px 16px;
-  padding: 16px;
+  gap: 14px 20px;
+  padding: 20px;
   background: #fff8fa;
   border-radius: 16px;
   border: 1px solid #f0dfe5;
@@ -4148,7 +4262,7 @@ body[data-page="panel"] .detalhe-resumo-item {
 }
 
 body[data-page="panel"] .detalhe-resumo-item span {
-  font-size: 0.74rem;
+  font-size: 0.85rem;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -4156,7 +4270,7 @@ body[data-page="panel"] .detalhe-resumo-item span {
 }
 
 body[data-page="panel"] .detalhe-resumo-item strong {
-  font-size: 0.92rem;
+  font-size: 1.1rem;
   font-weight: 700;
   color: #1e1820;
 }
@@ -4240,7 +4354,7 @@ body[data-page="panel"] .detalhe-comp-item {
 
 body[data-page="panel"] .detalhe-comp-desc {
   flex: 1;
-  font-size: 0.88rem;
+  font-size: 0.96rem;
   font-weight: 500;
   color: #1e1820;
   white-space: nowrap;
@@ -4249,7 +4363,7 @@ body[data-page="panel"] .detalhe-comp-desc {
 }
 
 body[data-page="panel"] .detalhe-comp-valor {
-  font-size: 0.88rem;
+  font-size: 0.96rem;
   font-weight: 700;
   color: #2f6f44;
   white-space: nowrap;
@@ -4381,9 +4495,7 @@ body[data-page="panel"] .extrato-btn-extrair-xls {
 body[data-page="panel"] .detalhe-regras-wrap {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding-top: 12px;
-  border-top: 1px solid #f0dfe5;
+  gap: 16px;
 }
 
 body[data-page="panel"] .detalhe-regras-form {
@@ -4394,14 +4506,8 @@ body[data-page="panel"] .detalhe-regras-form {
 
 body[data-page="panel"] .detalhe-regras-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
-  gap: 8px;
-}
-
-@media (max-width: 420px) {
-  body[data-page="panel"] .detalhe-regras-grid {
-    grid-template-columns: 1fr;
-  }
+  grid-template-columns: 1fr;
+  gap: 14px;
 }
 
 body[data-page="panel"] .detalhe-regras-field {
@@ -4411,7 +4517,7 @@ body[data-page="panel"] .detalhe-regras-field {
 }
 
 body[data-page="panel"] .detalhe-regras-field span {
-  font-size: 0.75rem;
+  font-size: 0.85rem;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -4419,10 +4525,10 @@ body[data-page="panel"] .detalhe-regras-field span {
 }
 
 body[data-page="panel"] .detalhe-regras-field input {
-  padding: 7px 10px;
+  padding: 12px 14px;
   border: 1px solid #e7dbe0;
-  border-radius: 8px;
-  font-size: 0.87rem;
+  border-radius: 10px;
+  font-size: 1rem;
   background: #fff;
   color: #1e1820;
   transition: border-color 0.15s;
@@ -4504,7 +4610,7 @@ body[data-page="panel"] .detalhe-regra-salva-item {
 }
 
 body[data-page="panel"] .detalhe-regra-salva-item span {
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -4512,7 +4618,7 @@ body[data-page="panel"] .detalhe-regra-salva-item span {
 }
 
 body[data-page="panel"] .detalhe-regra-salva-item strong {
-  font-size: 0.9rem;
+  font-size: 1rem;
   font-weight: 700;
   color: #1e1820;
 }
@@ -4952,4 +5058,460 @@ body[data-page="panel"] .regras-auto-form-error {
   font-size: 0.82rem;
   color: #c0392b;
   margin: 0;
+}
+
+/* ══ Seção Contabilidade ═══════════════════════════════════════════════════ */
+
+body[data-page="panel"] .contab-panel {
+  padding: 0;
+}
+
+body[data-page="panel"] .contab-header {
+  padding: 28px 32px 16px;
+}
+
+body[data-page="panel"] .contab-header h2 {
+  font-size: 1.35rem;
+  font-weight: 800;
+  margin: 0 0 4px;
+  color: #1e1820;
+}
+
+body[data-page="panel"] .contab-header p {
+  font-size: 0.9rem;
+  color: #9d7b88;
+  margin: 0;
+}
+
+/* Abas */
+body[data-page="panel"] .contab-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 0 32px 20px;
+  border-bottom: 1px solid #f0dfe5;
+}
+
+body[data-page="panel"] .contab-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 20px;
+  border-radius: 10px;
+  border: 1.5px solid transparent;
+  background: transparent;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #665c62;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+body[data-page="panel"] .contab-tab:hover {
+  background: #fff0f3;
+  color: var(--panel, #8b3a52);
+}
+
+body[data-page="panel"] .contab-tab.is-active {
+  background: #fff0f3;
+  border-color: #e7bfca;
+  color: var(--panel, #8b3a52);
+}
+
+body[data-page="panel"] .contab-tab-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: #f0dfe5;
+  color: #8b3a52;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+body[data-page="panel"] .contab-tab.is-active .contab-tab-count {
+  background: #8b3a52;
+  color: #fff;
+}
+
+/* Card principal */
+body[data-page="panel"] .contab-card {
+  padding: 0;
+  overflow: hidden;
+}
+
+/* Toolbar */
+body[data-page="panel"] .contab-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 18px 24px;
+  border-bottom: 1px solid #f0dfe5;
+  flex-wrap: wrap;
+}
+
+body[data-page="panel"] .contab-search-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 220px;
+  background: #faf6f8;
+  border: 1px solid #e7dbe0;
+  border-radius: 10px;
+  padding: 8px 14px;
+  color: #9d7b88;
+}
+
+body[data-page="panel"] .contab-search {
+  flex: 1;
+  border: none;
+  background: transparent;
+  outline: none;
+  font-size: 0.9rem;
+  color: #1e1820;
+}
+
+body[data-page="panel"] .contab-inativos-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.87rem;
+  color: #665c62;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+body[data-page="panel"] .contab-novo-btn {
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+/* Tabela */
+body[data-page="panel"] .contab-table-wrap {
+  overflow-x: auto;
+  position: relative;
+}
+
+body[data-page="panel"] .contab-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 40px;
+  font-size: 0.9rem;
+  color: #9d7b88;
+}
+
+body[data-page="panel"] .contab-empty {
+  padding: 40px;
+  text-align: center;
+  font-size: 0.9rem;
+  color: #9d7b88;
+}
+
+body[data-page="panel"] .contab-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+body[data-page="panel"] .contab-table thead th {
+  padding: 10px 16px;
+  text-align: left;
+  font-size: 0.76rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #9d7b88;
+  background: #fdf8fa;
+  border-bottom: 1px solid #f0dfe5;
+  white-space: nowrap;
+}
+
+body[data-page="panel"] .contab-row td {
+  padding: 11px 16px;
+  border-bottom: 1px solid #faf3f5;
+  vertical-align: middle;
+  color: #1e1820;
+}
+
+body[data-page="panel"] .contab-row:last-child td {
+  border-bottom: none;
+}
+
+body[data-page="panel"] .contab-row:hover td {
+  background: #fff8fa;
+}
+
+body[data-page="panel"] .contab-row--inativo td {
+  opacity: 0.55;
+}
+
+body[data-page="panel"] .contab-cell-code {
+  font-family: monospace;
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: #4a3040;
+  white-space: nowrap;
+}
+
+body[data-page="panel"] .contab-cell-nome {
+  font-weight: 600;
+  max-width: 360px;
+}
+
+/* Badges status */
+body[data-page="panel"] .contab-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+body[data-page="panel"] .contab-badge--ativo {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+body[data-page="panel"] .contab-badge--inativo {
+  background: #f3f4f6;
+  color: #6b7280;
+}
+
+/* Botões de ação na tabela */
+body[data-page="panel"] .contab-cell-actions {
+  white-space: nowrap;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+body[data-page="panel"] .contab-btn-edit,
+body[data-page="panel"] .contab-btn-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 11px;
+  border-radius: 8px;
+  border: 1px solid #e7dbe0;
+  background: #fff;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  color: #665c62;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+body[data-page="panel"] .contab-btn-edit:hover {
+  background: #fff0f3;
+  color: #8b3a52;
+  border-color: #e7bfca;
+}
+
+body[data-page="panel"] .contab-btn-toggle:hover {
+  background: #f0fdf4;
+  color: #15803d;
+  border-color: #bbf7d0;
+}
+
+body[data-page="panel"] .contab-btn-toggle:disabled,
+body[data-page="panel"] .contab-btn-edit:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Spinner */
+@keyframes spin { to { transform: rotate(360deg); } }
+body[data-page="panel"] .spin { animation: spin 0.9s linear infinite; }
+
+/* ── Dialog de edição ────────────────────────────────────────────────────── */
+
+body[data-page="panel"] .contab-dialog {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  width: min(620px, 96vw);
+  max-height: 90dvh;
+  padding: 0;
+  border: none;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 24px 64px rgba(0,0,0,0.20), 0 4px 16px rgba(0,0,0,0.08);
+  overflow: hidden;
+}
+
+body[data-page="panel"] .contab-dialog[open] {
+  display: flex;
+  flex-direction: column;
+  animation: detalhe-fade-in 0.2s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+body[data-page="panel"] .contab-dialog::backdrop {
+  background: rgba(20,14,18,0.48);
+  backdrop-filter: blur(3px);
+}
+
+body[data-page="panel"] .contab-dialog-inner {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+body[data-page="panel"] .contab-dialog-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 24px 28px 18px;
+  border-bottom: 1px solid #f0dfe5;
+  background: #fffbfc;
+  flex-shrink: 0;
+}
+
+body[data-page="panel"] .contab-dialog-label {
+  font-size: 0.76rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: #9d7b88;
+  margin: 0 0 4px;
+}
+
+body[data-page="panel"] .contab-dialog-title {
+  font-size: 1.15rem;
+  font-weight: 800;
+  color: #1e1820;
+  margin: 0;
+}
+
+body[data-page="panel"] .contab-dialog-close {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid #e7dbe0;
+  background: transparent;
+  cursor: pointer;
+  color: #665c62;
+  transition: background 0.15s;
+}
+
+body[data-page="panel"] .contab-dialog-close:hover {
+  background: #fff0f3;
+  color: var(--panel, #8b3a52);
+}
+
+/* Formulário */
+body[data-page="panel"] .contab-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 24px 28px;
+}
+
+body[data-page="panel"] .contab-form-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+}
+
+body[data-page="panel"] .contab-form-row--2 {
+  grid-template-columns: 1fr 1fr;
+}
+
+@media (max-width: 520px) {
+  body[data-page="panel"] .contab-form-row--2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+body[data-page="panel"] .contab-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+body[data-page="panel"] .contab-field span {
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #9d7b88;
+}
+
+body[data-page="panel"] .contab-field span em {
+  color: #c0392b;
+  font-style: normal;
+  margin-left: 2px;
+}
+
+body[data-page="panel"] .contab-field input[type="text"],
+body[data-page="panel"] .contab-field input[type="number"] {
+  padding: 11px 14px;
+  border: 1.5px solid #e7dbe0;
+  border-radius: 10px;
+  font-size: 0.95rem;
+  color: #1e1820;
+  background: #fff;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+body[data-page="panel"] .contab-field input:focus {
+  border-color: var(--panel, #8b3a52);
+  box-shadow: 0 0 0 3px rgba(139,58,82,0.1);
+}
+
+body[data-page="panel"] .contab-field--check {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+body[data-page="panel"] .contab-field--check span {
+  text-transform: none;
+  font-size: 0.9rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: #1e1820;
+}
+
+body[data-page="panel"] .contab-form-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 6px;
+  border-top: 1px solid #f0dfe5;
+  margin-top: 4px;
+}
+
+body[data-page="panel"] .contab-form-error {
+  padding: 9px 14px;
+  background: #fee2e2;
+  border: 1px solid #fecaca;
+  border-radius: 10px;
+  color: #b91c1c;
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+body[data-page="panel"] .contab-form-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
 }

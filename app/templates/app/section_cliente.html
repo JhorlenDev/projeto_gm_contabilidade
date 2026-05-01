@@ -235,19 +235,13 @@
             <form class="client-account-form" data-client-account-form hidden>
               <input type="hidden" name="id" />
               <input type="hidden" name="cliente" />
+              <input type="hidden" name="tipo" value="BANCARIA" />
               <div class="client-account-form-head">
                 <strong data-client-account-form-title>Nova conta</strong>
-                <span data-client-account-form-subtitle>Configure contas bancárias ou contábeis vinculadas a este cliente.</span>
+                <span data-client-account-form-subtitle>Configure as contas bancárias vinculadas a este cliente.</span>
               </div>
 
               <div class="client-account-form-grid">
-                <label>
-                  <span>Tipo</span>
-                  <select name="tipo" required>
-                    <option value="BANCARIA">Conta bancária</option>
-                    <option value="CONTABIL">Conta contábil</option>
-                  </select>
-                </label>
                 <label>
                   <span>Apelido</span>
                   <input type="text" name="apelido" placeholder="Conta principal" autocomplete="off" />
@@ -258,6 +252,7 @@
                     <span>Banco</span>
                     <select data-client-account-bank-select required>
                       <option value="">Selecione o banco</option>
+                      <option value="Banco da Amazônia">Banco da Amazônia</option>
                       <option value="Banco do Brasil">Banco do Brasil</option>
                       <option value="Bradesco">Bradesco</option>
                       <option value="Caixa">Caixa</option>
@@ -294,16 +289,15 @@
                     <span>Número</span>
                     <input type="text" name="numero" placeholder="12345-6" autocomplete="off" />
                   </label>
-                </div>
 
-                <div class="client-account-section" data-account-fields="contabil">
                   <label class="client-account-full">
-                    <span>Código contábil</span>
-                    <input type="text" name="codigo_contabil" placeholder="1.1.01.001" autocomplete="off" />
-                  </label>
-                  <label class="client-account-full">
-                    <span>Descrição contábil</span>
-                    <input type="text" name="descricao_contabil" placeholder="Conta caixa principal" autocomplete="off" />
+                    <span>Código contábil
+                      <span class="client-account-contabil-hint">(código do plano de contas)</span>
+                    </span>
+                    <div class="client-account-contabil-wrap">
+                      <input type="text" name="codigo_contabil" placeholder="ex: 237" autocomplete="off" maxlength="20" data-client-account-codigo-contabil />
+                      <span class="client-account-contabil-badge" data-client-account-contabil-badge hidden></span>
+                    </div>
                   </label>
                 </div>
 

@@ -377,7 +377,7 @@
   }
 
   function normalizePanelView(view) {
-    if (view === "clientes" || view === "conciliador" || view === "perfis") {
+    if (view === "clientes" || view === "conciliador" || view === "perfis" || view === "contabilidade") {
       return view;
     }
     return "dashboard";
@@ -414,6 +414,116 @@
     }
 
     return target;
+  }
+
+  // ── Combobox reutilizável ─────────────────────────────────────────────────
+  // setupCombobox(inputEl, getList, options)
+  //   getList: array ou function() que retorna array com itens { codigo, nome }
+  //   options.getLabel(item): texto exibido no dropdown
+  //   options.getValue(item): valor salvo no input
+  function setupCombobox(inputEl, getList, options = {}) {
+    if (!inputEl) return;
+    const getLabel = options.getLabel || ((item) => `${item.codigo} \u2014 ${item.nome}`);
+    const getValue = options.getValue || ((item) => String(item.codigo));
+    const maxResults = options.maxResults || 60;
+
+    const wrap = document.createElement("div");
+    wrap.className = "combobox-wrap";
+    inputEl.parentNode.insertBefore(wrap, inputEl);
+    wrap.appendChild(inputEl);
+
+    const dropdown = document.createElement("div");
+    dropdown.className = "combobox-dropdown";
+    dropdown.hidden = true;
+    wrap.appendChild(dropdown);
+
+    let activeIdx = -1;
+
+    function getListNow() {
+      return typeof getList === "function" ? getList() : (Array.isArray(getList) ? getList : []);
+    }
+
+    function filterList(q) {
+      if (!q) return [];
+      const norm = q.toLowerCase().trim();
+      const normNoSep = norm.replace(/[.\-\s]/g, "");
+      return getListNow()
+        .filter((item) => {
+          const code = String(item.codigo).toLowerCase();
+          const codNoSep = code.replace(/[.\-\s]/g, "");
+          const name = String(item.nome).toLowerCase();
+          return codNoSep.startsWith(normNoSep) || code.startsWith(norm) || name.includes(norm);
+        })
+        .slice(0, maxResults);
+    }
+
+    function renderDropdown(items) {
+      activeIdx = -1;
+      if (!items.length) { dropdown.hidden = true; return; }
+      dropdown.innerHTML = items
+        .map((item, i) =>
+          `<div class="combobox-option" data-idx="${i}" data-val="${escapeHtml(getValue(item))}">${escapeHtml(getLabel(item))}</div>`
+        )
+        .join("");
+      dropdown.hidden = false;
+      dropdown.querySelectorAll(".combobox-option").forEach((opt) => {
+        opt.addEventListener("mousedown", (e) => {
+          e.preventDefault();
+          inputEl.value = opt.dataset.val;
+          dropdown.hidden = true;
+          inputEl.dispatchEvent(new Event("input", { bubbles: true }));
+        });
+      });
+    }
+
+    function setActive(idx) {
+      const opts = dropdown.querySelectorAll(".combobox-option");
+      opts.forEach((o) => o.classList.remove("is-active"));
+      activeIdx = (idx >= 0 && idx < opts.length) ? idx : -1;
+      if (activeIdx >= 0) {
+        opts[activeIdx].classList.add("is-active");
+        opts[activeIdx].scrollIntoView({ block: "nearest" });
+      }
+    }
+
+    inputEl.addEventListener("input", () => {
+      renderDropdown(filterList(inputEl.value.trim()));
+    });
+
+    inputEl.addEventListener("focus", () => {
+      const q = inputEl.value.trim();
+      const list = getListNow();
+      if (q) {
+        renderDropdown(filterList(q));
+      } else if (list.length) {
+        renderDropdown(list.slice(0, maxResults));
+      }
+    });
+
+    inputEl.addEventListener("blur", () => {
+      setTimeout(() => { dropdown.hidden = true; }, 160);
+    });
+
+    inputEl.addEventListener("keydown", (e) => {
+      if (dropdown.hidden) return;
+      const opts = dropdown.querySelectorAll(".combobox-option");
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setActive(Math.min(activeIdx + 1, opts.length - 1));
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setActive(Math.max(activeIdx - 1, 0));
+      } else if (e.key === "Enter") {
+        if (activeIdx >= 0) {
+          e.preventDefault();
+          inputEl.value = opts[activeIdx].dataset.val;
+          dropdown.hidden = true;
+          inputEl.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+      } else if (e.key === "Escape") {
+        dropdown.hidden = true;
+      }
+    });
   }
 
   function setupPanelNavigation() {
@@ -2725,19 +2835,46 @@
     }
 
     function syncAccountTypeFields() {
-      if (!accountForm || !accountType) {
+      if (!accountForm) {
         return;
       }
-
-      const isBank = accountType.value === "BANCARIA";
+      // Sempre bancária — garante visibilidade
       if (accountFieldsBank) {
-        accountFieldsBank.classList.toggle("is-active", isBank);
+        accountFieldsBank.classList.add("is-active");
       }
-      if (accountFieldsContabil) {
-        accountFieldsContabil.classList.toggle("is-active", !isBank);
-      }
-
       syncAccountBankField();
+    }
+
+    function validateCodigoContabil(value) {
+      if (!value) return null; // vazio = neutro
+      const codigoNorm = String(value).trim();
+      const plano = window.__GM_PLANO_CONTAS__ || [];
+      return plano.some((c) => String(c.codigo).trim() === codigoNorm);
+    }
+
+    function syncCodigoContabilBadge(inputEl) {
+      const badge = accountForm?.querySelector("[data-client-account-contabil-badge]");
+      if (!badge || !inputEl) return;
+      const val = String(inputEl.value || "").trim();
+      if (!val) {
+        badge.hidden = true;
+        badge.className = "client-account-contabil-badge";
+        badge.textContent = "";
+        return;
+      }
+      const valid = validateCodigoContabil(val);
+      badge.hidden = false;
+      if (valid === true) {
+        badge.className = "client-account-contabil-badge is-valid";
+        badge.textContent = "✓";
+        badge.title = "Código encontrado no plano de contas";
+      } else if (valid === false) {
+        badge.className = "client-account-contabil-badge is-invalid";
+        badge.textContent = "✗";
+        badge.title = "Código não encontrado no plano de contas";
+      } else {
+        badge.hidden = true;
+      }
     }
 
     function formatCertificateSize(size) {
@@ -2813,13 +2950,13 @@
       accountForm.reset();
       if (clientAccountFormFields.id) clientAccountFormFields.id.value = "";
       if (clientAccountFormFields.cliente) clientAccountFormFields.cliente.value = state.activeClientId || "";
-      if (clientAccountFormFields.tipo) clientAccountFormFields.tipo.value = "BANCARIA";
       lastCustomBankValue = "";
       setAccountBankSelection("");
       syncAccountTypeFields();
+      syncCodigoContabilBadge(clientAccountFormFields.codigo_contabil);
       setAccountFormVisible(false);
       if (accountFormTitle) accountFormTitle.textContent = "Nova conta";
-      if (accountFormSubtitle) accountFormSubtitle.textContent = "Configure contas bancárias ou contábeis vinculadas a este cliente.";
+      if (accountFormSubtitle) accountFormSubtitle.textContent = "Configure as contas bancárias vinculadas a este cliente.";
       if (accountFormSubmit) accountFormSubmit.textContent = "Salvar conta";
     }
 
@@ -2832,13 +2969,11 @@
       accountForm.reset();
       if (clientAccountFormFields.id) clientAccountFormFields.id.value = record?.id || "";
       if (clientAccountFormFields.cliente) clientAccountFormFields.cliente.value = state.activeClientId || "";
-      if (clientAccountFormFields.tipo) clientAccountFormFields.tipo.value = record?.tipo || "BANCARIA";
       if (clientAccountFormFields.apelido) clientAccountFormFields.apelido.value = record?.apelido || "";
-      setAccountBankSelection(record?.tipo === "BANCARIA" ? (record?.banco || "") : "");
+      setAccountBankSelection(record?.banco || "");
       if (clientAccountFormFields.agencia) clientAccountFormFields.agencia.value = record?.agencia || "";
       if (clientAccountFormFields.numero) clientAccountFormFields.numero.value = record?.numero || "";
       if (clientAccountFormFields.codigo_contabil) clientAccountFormFields.codigo_contabil.value = record?.codigo_contabil || "";
-      if (clientAccountFormFields.descricao_contabil) clientAccountFormFields.descricao_contabil.value = record?.descricao_contabil || "";
       if (clientAccountFormFields.observacoes) clientAccountFormFields.observacoes.value = record?.observacoes || "";
 
       if (accountFormTitle) accountFormTitle.textContent = record?.id ? "Editar conta" : "Nova conta";
@@ -2848,6 +2983,7 @@
       if (accountFormSubmit) accountFormSubmit.textContent = record?.id ? "Salvar alterações" : "Salvar conta";
 
       syncAccountTypeFields();
+      syncCodigoContabilBadge(clientAccountFormFields.codigo_contabil);
       setAccountFormVisible(true);
       if (accountHint) accountHint.textContent = record?.id ? "Editando conta selecionada." : "Preencha os campos da nova conta.";
       window.requestAnimationFrame(() => {
@@ -3112,22 +3248,20 @@
 
       if (accountFormSubmit) accountFormSubmit.disabled = true;
       try {
-        const tipo = String(clientAccountFormFields.tipo?.value || "BANCARIA").trim() || "BANCARIA";
-        const banco = tipo === "BANCARIA" ? getSelectedAccountBank() : "";
+        const banco = getSelectedAccountBank();
 
-        if (tipo === "BANCARIA" && !banco) {
+        if (!banco) {
           throw new Error("Selecione um banco ou escolha Outro para digitar.");
         }
 
         const payload = {
           cliente: state.activeClientId,
-          tipo,
+          tipo: "BANCARIA",
           apelido: String(clientAccountFormFields.apelido?.value || "").trim(),
           banco,
           agencia: String(clientAccountFormFields.agencia?.value || "").trim(),
           numero: String(clientAccountFormFields.numero?.value || "").trim(),
           codigo_contabil: String(clientAccountFormFields.codigo_contabil?.value || "").trim(),
-          descricao_contabil: String(clientAccountFormFields.descricao_contabil?.value || "").trim(),
           observacoes: String(clientAccountFormFields.observacoes?.value || "").trim(),
         };
 
@@ -3255,6 +3389,12 @@
 
     if (clientAccountFormFields.bankSelect) {
       clientAccountFormFields.bankSelect.addEventListener("change", syncAccountBankField);
+    }
+
+    if (clientAccountFormFields.codigo_contabil) {
+      clientAccountFormFields.codigo_contabil.addEventListener("input", () => {
+        syncCodigoContabilBadge(clientAccountFormFields.codigo_contabil);
+      });
     }
 
     if (clientAccountFormFields.banco) {
@@ -4246,6 +4386,388 @@
     loadPerfis();
   }
 
+  // ── Contabilidade (Plano de Contas + Histórico Contábil) ──────────────────
+
+  function setupContabilidadeCrud(session) {
+    const panel = document.querySelector('[data-panel-view-section="contabilidade"]');
+    if (!panel) return;
+
+    // refs
+    const tabButtons    = Array.from(panel.querySelectorAll("[data-contab-tab]"));
+    const searchInput   = panel.querySelector("[data-contab-search]");
+    const inativosChk   = panel.querySelector("[data-contab-inativos]");
+    const novoBtn       = panel.querySelector("[data-contab-novo]");
+    const countPlano    = panel.querySelector("[data-contab-count-plano]");
+    const countHist     = panel.querySelector("[data-contab-count-historico]");
+    const thead         = panel.querySelector("[data-contab-thead]");
+    const tbody         = panel.querySelector("[data-contab-tbody]");
+    const loadingEl     = panel.querySelector("[data-contab-loading]");
+    const emptyEl       = panel.querySelector("[data-contab-empty]");
+    const dialog        = panel.querySelector("[data-contab-dialog]");
+    const dialogLabel   = panel.querySelector("[data-contab-dialog-label]");
+    const dialogTitle   = panel.querySelector("[data-contab-dialog-title]");
+    const dialogClose   = panel.querySelector("[data-contab-dialog-close]");
+    const dialogCancel  = panel.querySelector("[data-contab-dialog-cancel]");
+    const form          = panel.querySelector("[data-contab-form]");
+    const formError     = panel.querySelector("[data-contab-form-error]");
+    const fieldsPlano   = panel.querySelector("[data-contab-fields='plano']");
+    const fieldsHist    = panel.querySelector("[data-contab-fields='historico']");
+
+    const state = {
+      tab: "plano",          // "plano" | "historico"
+      plano: [],
+      historico: [],
+      showInativos: false,
+      search: "",
+      editingId: null,       // null = novo registro
+    };
+
+    // ── helpers ──────────────────────────────────────────────────────────────
+
+    function setLoading(on) {
+      if (loadingEl) loadingEl.hidden = !on;
+      if (tbody) tbody.hidden = on;
+    }
+
+    function showError(msg) {
+      if (!formError) return;
+      formError.textContent = msg;
+      formError.hidden = !msg;
+    }
+
+    function currentList() {
+      return state.tab === "plano" ? state.plano : state.historico;
+    }
+
+    function filteredList() {
+      const q = state.search.toLowerCase();
+      return currentList().filter((item) => {
+        if (!state.showInativos && !item.ativo) return false;
+        if (!q) return true;
+        const cod = String(item.codigo).toLowerCase();
+        const nom = (item.nome || "").toLowerCase();
+        return cod.includes(q) || nom.includes(q);
+      });
+    }
+
+    // ── render ────────────────────────────────────────────────────────────────
+
+    function renderTable() {
+      if (!thead || !tbody) return;
+      const list = filteredList();
+
+      // cabeçalho dinâmico
+      if (state.tab === "plano") {
+        thead.innerHTML = `<tr>
+          <th>Código</th><th>Classificação</th><th>Nome</th>
+          <th>Tipo</th><th>Natureza</th><th>Status</th><th>Ações</th>
+        </tr>`;
+      } else {
+        thead.innerHTML = `<tr>
+          <th>Código</th><th>Nome</th><th>Grupo</th><th>Status</th><th>Ações</th>
+        </tr>`;
+      }
+
+      if (list.length === 0) {
+        tbody.innerHTML = "";
+        if (emptyEl) emptyEl.hidden = false;
+        return;
+      }
+      if (emptyEl) emptyEl.hidden = true;
+
+      if (state.tab === "plano") {
+        tbody.innerHTML = list.map((item) => `
+          <tr class="contab-row ${item.ativo ? "" : "contab-row--inativo"}" data-contab-row-id="${item.id}">
+            <td class="contab-cell-code">${escHtml(String(item.codigo))}</td>
+            <td>${escHtml(item.classificacao || "—")}</td>
+            <td class="contab-cell-nome">${escHtml(item.nome)}</td>
+            <td>${escHtml(item.tipo || "—")}</td>
+            <td>${escHtml(item.natureza || "—")}</td>
+            <td>
+              <span class="contab-badge ${item.ativo ? "contab-badge--ativo" : "contab-badge--inativo"}">
+                ${item.ativo ? "Ativo" : "Inativo"}
+              </span>
+            </td>
+            <td class="contab-cell-actions">
+              <button class="contab-btn-edit" type="button" data-contab-edit="${item.id}" title="Editar">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                Editar
+              </button>
+              <button class="contab-btn-toggle" type="button" data-contab-toggle="${item.id}" data-ativo="${item.ativo}" title="${item.ativo ? "Inativar" : "Ativar"}">
+                ${item.ativo
+                  ? `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M8 12h8"/></svg> Inativar`
+                  : `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></svg> Ativar`
+                }
+              </button>
+            </td>
+          </tr>`).join("");
+      } else {
+        tbody.innerHTML = list.map((item) => `
+          <tr class="contab-row ${item.ativo ? "" : "contab-row--inativo"}" data-contab-row-id="${item.id}">
+            <td class="contab-cell-code">${escHtml(String(item.codigo))}</td>
+            <td class="contab-cell-nome">${escHtml(item.nome)}</td>
+            <td>${escHtml(item.grupo || "—")}</td>
+            <td>
+              <span class="contab-badge ${item.ativo ? "contab-badge--ativo" : "contab-badge--inativo"}">
+                ${item.ativo ? "Ativo" : "Inativo"}
+              </span>
+            </td>
+            <td class="contab-cell-actions">
+              <button class="contab-btn-edit" type="button" data-contab-edit="${item.id}" title="Editar">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                Editar
+              </button>
+              <button class="contab-btn-toggle" type="button" data-contab-toggle="${item.id}" data-ativo="${item.ativo}" title="${item.ativo ? "Inativar" : "Ativar"}">
+                ${item.ativo
+                  ? `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M8 12h8"/></svg> Inativar`
+                  : `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></svg> Ativar`
+                }
+              </button>
+            </td>
+          </tr>`).join("");
+      }
+
+      // atualizar contadores de aba
+      if (countPlano) countPlano.textContent = state.plano.filter((x) => x.ativo || state.showInativos).length;
+      if (countHist) countHist.textContent = state.historico.filter((x) => x.ativo || state.showInativos).length;
+    }
+
+    function escHtml(s) {
+      return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    }
+
+    // ── dialog ────────────────────────────────────────────────────────────────
+
+    function openDialog(item = null) {
+      if (!dialog || !form) return;
+      state.editingId = item ? item.id : null;
+      showError("");
+      form.reset();
+
+      const isPlano = state.tab === "plano";
+      if (fieldsPlano) fieldsPlano.hidden = !isPlano;
+      if (fieldsHist)  fieldsHist.hidden  = isPlano;
+
+      if (dialogLabel) dialogLabel.textContent = item ? "Editar registro" : "Novo registro";
+      if (dialogTitle) dialogTitle.textContent = isPlano ? "Plano de Contas" : "Histórico Contábil";
+
+      if (item) {
+        if (isPlano) {
+          form.elements.codigo.value         = item.codigo        || "";
+          form.elements.classificacao.value  = item.classificacao || "";
+          form.elements.nome.value           = item.nome          || "";
+          form.elements.tipo.value           = item.tipo          || "";
+          form.elements.natureza.value       = item.natureza      || "";
+          form.elements.ativo.checked        = !!item.ativo;
+        } else {
+          form.elements.codigo_historico.value  = item.codigo  || "";
+          form.elements.grupo.value             = item.grupo   || "";
+          form.elements.nome_historico.value    = item.nome    || "";
+          form.elements.ativo_historico.checked = !!item.ativo;
+        }
+      } else {
+        // defaults para novo
+        if (isPlano) form.elements.ativo.checked = true;
+        else form.elements.ativo_historico.checked = true;
+      }
+
+      if (typeof dialog.showModal === "function") dialog.showModal();
+      else dialog.setAttribute("open", "");
+    }
+
+    function closeDialog() {
+      if (typeof dialog?.close === "function") dialog.close();
+      else if (dialog) dialog.removeAttribute("open");
+    }
+
+    // ── API ───────────────────────────────────────────────────────────────────
+
+    async function loadData() {
+      setLoading(true);
+      try {
+        const [pcData, hcData] = await Promise.all([
+          apiRequest(session, "/plano-contas/?todos=1"),
+          apiRequest(session, "/historico-contabil/?todos=1"),
+        ]);
+        state.plano    = Array.isArray(pcData)   ? pcData   : (pcData?.results   || []);
+        state.historico = Array.isArray(hcData) ? hcData : (hcData?.results || []);
+        // atualizar cache global com apenas ativos
+        window.__GM_PLANO_CONTAS__ = state.plano.filter((x) => x.ativo);
+        window.__GM_HISTORICOS__   = state.historico.filter((x) => x.ativo);
+      } catch (e) {
+        logError("Falha ao carregar dados de contabilidade.", e);
+      } finally {
+        setLoading(false);
+        renderTable();
+      }
+    }
+
+    async function saveItem(payload) {
+      const endpoint = state.tab === "plano" ? "/plano-contas/" : "/historico-contabil/";
+      const isEdit   = !!state.editingId;
+      const url      = isEdit ? `${endpoint}${state.editingId}/` : endpoint;
+      const method   = isEdit ? "PATCH" : "POST";
+
+      const resp = await fetch(url.startsWith("/") ? `/api${url}` : url, {
+        method,
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.accessToken}`,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error(Object.values(err).flat().join(" ") || `Erro ${resp.status}`);
+      }
+      return resp.json();
+    }
+
+    async function toggleAtivo(id, currentAtivo) {
+      const endpoint = state.tab === "plano" ? "/plano-contas/" : "/historico-contabil/";
+      const url = `/api${endpoint}${id}/`;
+      const resp = await fetch(url, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.accessToken}`,
+        },
+        body: JSON.stringify({ ativo: !currentAtivo }),
+      });
+      if (!resp.ok) throw new Error(`Erro ${resp.status}`);
+      return resp.json();
+    }
+
+    // ── events ────────────────────────────────────────────────────────────────
+
+    // abas
+    tabButtons.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        state.tab = btn.dataset.contabTab;
+        tabButtons.forEach((b) => {
+          b.classList.toggle("is-active", b.dataset.contabTab === state.tab);
+          b.setAttribute("aria-selected", b.dataset.contabTab === state.tab ? "true" : "false");
+        });
+        if (searchInput) searchInput.value = "";
+        state.search = "";
+        renderTable();
+      });
+    });
+
+    // pesquisa
+    if (searchInput) {
+      searchInput.addEventListener("input", () => {
+        state.search = searchInput.value;
+        renderTable();
+      });
+    }
+
+    // toggle inativos
+    if (inativosChk) {
+      inativosChk.addEventListener("change", () => {
+        state.showInativos = inativosChk.checked;
+        renderTable();
+      });
+    }
+
+    // botão Novo
+    if (novoBtn) novoBtn.addEventListener("click", () => openDialog(null));
+
+    // fechar dialog
+    if (dialogClose)  dialogClose.addEventListener("click",  closeDialog);
+    if (dialogCancel) dialogCancel.addEventListener("click", closeDialog);
+    if (dialog) {
+      dialog.addEventListener("click", (e) => { if (e.target === dialog) closeDialog(); });
+    }
+
+    // delegação: editar e toggle na tabela
+    if (tbody) {
+      tbody.addEventListener("click", async (e) => {
+        const editBtn   = e.target.closest("[data-contab-edit]");
+        const toggleBtn = e.target.closest("[data-contab-toggle]");
+
+        if (editBtn) {
+          const id   = editBtn.dataset.contabEdit;
+          const item = currentList().find((x) => x.id === id);
+          if (item) openDialog(item);
+          return;
+        }
+
+        if (toggleBtn) {
+          const id       = toggleBtn.dataset.contabToggle;
+          const ativo    = toggleBtn.dataset.ativo === "true";
+          toggleBtn.disabled = true;
+          try {
+            const updated = await toggleAtivo(id, ativo);
+            // atualizar na lista local
+            const list = state.tab === "plano" ? state.plano : state.historico;
+            const idx  = list.findIndex((x) => x.id === id);
+            if (idx !== -1) list[idx] = updated;
+            window.__GM_PLANO_CONTAS__ = state.plano.filter((x) => x.ativo);
+            window.__GM_HISTORICOS__   = state.historico.filter((x) => x.ativo);
+            renderTable();
+          } catch (err) {
+            logError("Erro ao alternar status.", err);
+          } finally {
+            toggleBtn.disabled = false;
+          }
+          return;
+        }
+      });
+    }
+
+    // submit do form
+    if (form) {
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        showError("");
+        const submitBtn = panel.querySelector("[data-contab-form-submit]");
+        if (submitBtn) submitBtn.disabled = true;
+
+        try {
+          let payload;
+          if (state.tab === "plano") {
+            payload = {
+              codigo:        form.elements.codigo.value.trim(),
+              classificacao: form.elements.classificacao.value.trim(),
+              nome:          form.elements.nome.value.trim(),
+              tipo:          form.elements.tipo.value.trim(),
+              natureza:      form.elements.natureza.value.trim(),
+              ativo:         form.elements.ativo.checked,
+            };
+            if (!payload.codigo || !payload.nome) { showError("Código e Nome são obrigatórios."); return; }
+          } else {
+            payload = {
+              codigo: parseInt(form.elements.codigo_historico.value, 10),
+              nome:   form.elements.nome_historico.value.trim(),
+              grupo:  form.elements.grupo.value.trim(),
+              ativo:  form.elements.ativo_historico.checked,
+            };
+            if (!payload.codigo || !payload.nome) { showError("Código e Nome são obrigatórios."); return; }
+          }
+
+          const saved = await saveItem(payload);
+          const list  = state.tab === "plano" ? state.plano : state.historico;
+          const idx   = list.findIndex((x) => x.id === saved.id);
+          if (idx !== -1) list[idx] = saved;
+          else list.push(saved);
+          list.sort((a, b) => String(a.codigo).localeCompare(String(b.codigo), undefined, { numeric: true }));
+          window.__GM_PLANO_CONTAS__ = state.plano.filter((x) => x.ativo);
+          window.__GM_HISTORICOS__   = state.historico.filter((x) => x.ativo);
+          closeDialog();
+          renderTable();
+        } catch (err) {
+          showError(err.message || "Falha ao salvar.");
+        } finally {
+          if (submitBtn) submitBtn.disabled = false;
+        }
+      });
+    }
+
+    loadData();
+  }
+
   // ─────────────────────────────────────────────────────────────────────────
 
   function setupExtratoImport(session) {
@@ -4296,6 +4818,7 @@
       regrasFlexi: [],   // todas as regras ordenadas por prioridade (para matching CONTEM/IGUAL/COMECA_COM)
       clientes: [],      // lista completa de clientes carregados (para validação de CNPJ)
       comprovantes: {},  // keyed por documento (string) → ComprovanteResult da API
+      contasBancarias: [], // contas bancárias da empresa selecionada (para pré-preenchimento)
     };
 
     // ── Dropzone drag & drop ──────────────────────────────────────────────
@@ -4563,6 +5086,18 @@
       }
     }
 
+    async function loadContasBancarias(empresaId) {
+      if (!empresaId) { state.contasBancarias = []; return; }
+      try {
+        const data = await apiRequest(session, `/contas-clientes/?cliente=${empresaId}&tipo=BANCARIA&ativo=true`);
+        const lista = Array.isArray(data) ? data : (data?.results || []);
+        state.contasBancarias = lista;
+      } catch (err) {
+        state.contasBancarias = [];
+        logWarn("Falha ao carregar contas bancárias da empresa.", err);
+      }
+    }
+
     function matchesRule(desc, textoRef, tipoComp) {
       const ref = textoRef.toLowerCase();
       if (tipoComp === "IGUAL") return desc === ref;
@@ -4634,6 +5169,24 @@
     const regrasAutoCancel = panel.querySelector("[data-regras-auto-cancel]");
     const regrasAutoFormError = panel.querySelector("[data-regras-auto-form-error]");
     const selectEmpresa = panel.querySelector("[data-extrato-empresa]");
+
+    // ── Comboboxes de plano de contas e histórico ─────────────────────────
+    if (regrasAutoForm) {
+      setupCombobox(regrasAutoForm.elements.conta_debito, () => window.__GM_PLANO_CONTAS__ || []);
+      setupCombobox(regrasAutoForm.elements.conta_credito, () => window.__GM_PLANO_CONTAS__ || []);
+      setupCombobox(regrasAutoForm.elements.codigo_historico, () => window.__GM_HISTORICOS__ || [], {
+        getLabel: (item) => `${item.codigo} \u2014 ${item.nome}`,
+        getValue: (item) => String(item.codigo),
+      });
+    }
+    if (detalheRegrasForm) {
+      setupCombobox(detalheRegrasForm.elements.codDebito, () => window.__GM_PLANO_CONTAS__ || []);
+      setupCombobox(detalheRegrasForm.elements.codCredito, () => window.__GM_PLANO_CONTAS__ || []);
+      setupCombobox(detalheRegrasForm.elements.codHistorico, () => window.__GM_HISTORICOS__ || [], {
+        getLabel: (item) => `${item.codigo} \u2014 ${item.nome}`,
+        getValue: (item) => String(item.codigo),
+      });
+    }
 
     // ── Regras Automáticas — render e CRUD ───────────────────────────────
     const COMP_LABELS = { CONTEM: "Contém", IGUAL: "Igual", COMECA_COM: "Começa com" };
@@ -4879,6 +5432,39 @@
         detalheRegrasForm.elements.codDebito.value = r.codDebito || "";
         detalheRegrasForm.elements.codCredito.value = r.codCredito || "";
         detalheRegrasForm.elements.codHistorico.value = r.codHistorico || "";
+
+        // Pré-preenchimento automático: quando não há regra, usa o código contábil
+        // da conta bancária da empresa que corresponde ao banco do extrato.
+        // Inversão contábil: DÉBITO no extrato → lançamento CRÉDITO contábil (e vice-versa)
+        if (!r.codDebito && !r.codCredito && state.contasBancarias.length) {
+          // Mapa: valor do select de banco no conciliador → substring do nome da conta bancária
+          const BANCO_NORM = {
+            bb: "banco do brasil",
+            bradesco: "bradesco",
+            amazonia: "amaz",
+            santander: "santander",
+            caixa: "caixa",
+            itau: "ita",
+            sicredi: "sicredi",
+            sicoob: "sicoob",
+            inter: "inter",
+            nubank: "nubank",
+            btg: "btg",
+          };
+          const bancoKey = (state.extratoMeta?.banco || "").toLowerCase().replace(/[^a-z]/g, "");
+          const bancoNorm = BANCO_NORM[bancoKey] || bancoKey;
+          const conta = state.contasBancarias.find(
+            (c) => c.banco && c.codigo_contabil && c.banco.toLowerCase().includes(bancoNorm)
+          );
+          if (conta) {
+            if (l.natureza === "DEBITO") {
+              detalheRegrasForm.elements.codCredito.value = conta.codigo_contabil;
+            } else if (l.natureza === "CREDITO") {
+              detalheRegrasForm.elements.codDebito.value = conta.codigo_contabil;
+            }
+          }
+        }
+
         renderRegraSalva(r);
       }
       if (detalheRegrasError) { detalheRegrasError.textContent = ""; detalheRegrasError.hidden = true; }
@@ -5415,7 +6001,12 @@
         state.regrasFlexi = [];
         state.regrasMap = {};
         renderRegrasAutoList();
-        if (state.empresaId) loadRegrasFromAPI();
+        if (state.empresaId) {
+          loadRegrasFromAPI();
+          loadContasBancarias(state.empresaId);
+        } else {
+          state.contasBancarias = [];
+        }
       });
     }
 
@@ -5444,6 +6035,7 @@
             state.empresaId = clientes[0].id;
             renderRegrasAutoList();
             loadRegrasFromAPI();
+            loadContasBancarias(state.empresaId);
           }
         }
       } catch (err) {
@@ -6015,6 +6607,18 @@
       return;
     }
 
+    // Carregar listas de plano de contas e históricos contábeis
+    try {
+      const [pcRes, hcRes] = await Promise.all([
+        fetch("/api/plano-contas/", { headers: { Authorization: `Bearer ${session.accessToken}` } }),
+        fetch("/api/historico-contabil/", { headers: { Authorization: `Bearer ${session.accessToken}` } }),
+      ]);
+      if (pcRes.ok) window.__GM_PLANO_CONTAS__ = await pcRes.json();
+      if (hcRes.ok) window.__GM_HISTORICOS__ = await hcRes.json();
+    } catch (e) {
+      logError("Falha ao carregar plano de contas / históricos.", e);
+    }
+
     const setupErrors = [];
     const runPanelSetup = (label, setup) => {
       try {
@@ -6029,6 +6633,7 @@
       runPanelSetup("navegação", setupPanelNavigation);
       runPanelSetup("clientes", () => setupClientsCrud(session));
       runPanelSetup("perfis", () => setupPerfisCrud(session));
+      runPanelSetup("contabilidade", () => setupContabilidadeCrud(session));
       runPanelSetup("extrato", () => setupExtratoImport(session));
       runPanelSetup("rascunho do conciliador", setupConciliadorDraft);
       setPanelView(getInitialPanelView(), { updateUrl: false });

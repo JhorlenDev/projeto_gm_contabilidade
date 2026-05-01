@@ -7,7 +7,7 @@ from pathlib import Path
 from django.utils import timezone
 from rest_framework import serializers
 
-from .models import Cliente, ContaCliente, CertificadoDigitalCliente, Escritorio, ImportacaoExtrato, PerfilConciliacao, RegraConciliador, TransacaoImportada, TipoArquivo, TipoComparacao, TipoContaCliente, TipoMovimento
+from .models import Cliente, ContaCliente, CertificadoDigitalCliente, Escritorio, HistoricoContabil, ImportacaoExtrato, PerfilConciliacao, PlanoContas, RegraConciliador, TransacaoImportada, TipoArquivo, TipoComparacao, TipoContaCliente, TipoMovimento
 
 
 def _normalize_situacao(value: str) -> str:
@@ -680,3 +680,23 @@ class PerfilConciliacaoSerializer(serializers.ModelSerializer):
     def get_parametros_count(self, obj):
         params = obj.parametros or []
         return len(params) if isinstance(params, list) else 0
+
+
+class PlanoContasSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PlanoContas
+        fields = ["id", "codigo", "classificacao", "nome", "tipo", "natureza", "ativo"]
+        extra_kwargs = {
+            "classificacao": {"required": False, "allow_blank": True},
+            "tipo": {"required": False, "allow_blank": True},
+            "natureza": {"required": False, "allow_blank": True},
+        }
+
+
+class HistoricoContabilSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = HistoricoContabil
+        fields = ["id", "codigo", "nome", "grupo", "ativo"]
+        extra_kwargs = {
+            "grupo": {"required": False, "allow_blank": True},
+        }
