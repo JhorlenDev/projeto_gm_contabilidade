@@ -176,6 +176,12 @@ def _certificado_upload_to(instance, filename: str) -> str:
     return f"certificados/{cliente}/{uuid.uuid4().hex}{extension}.enc"
 
 
+def _banco_logo_upload_to(instance, filename: str) -> str:
+    extension = Path(filename or "logo").suffix.lower() or ".png"
+    slug = getattr(instance, "slug", None) or getattr(instance, "codigo", None) or "banco"
+    return f"bancos/logos/{slug}/{uuid.uuid4().hex}{extension}"
+
+
 class CertificadoDigitalCliente(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     cliente = models.OneToOneField(Cliente, on_delete=models.PROTECT, related_name="certificado_digital")
@@ -425,6 +431,38 @@ class HistoricoContabil(models.Model):
 
     def __str__(self):
         return f"{self.codigo} — {self.nome}"
+
+
+class Banco(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    codigo = models.CharField(max_length=10, unique=True, db_index=True)
+    nome = models.CharField(max_length=120, unique=True)
+    slug = models.SlugField(max_length=140, unique=True, db_index=True)
+    sigla = models.CharField(max_length=8, blank=True, default="")
+    cor_principal = models.CharField(max_length=20, blank=True, default="#64748b")
+    logo = models.FileField(upload_to=_banco_logo_upload_to, blank=True, default="", max_length=255)
+    ativo = models.BooleanField(default=True, db_index=True)
+    criado_em = models.DateTimeField(auto_now_add=True)
+    atualizado_em = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["nome"]
+        indexes = [
+            models.Index(fields=["ativo", "nome"]),
+            models.Index(fields=["codigo"]),
+            models.Index(fields=["slug"]),
+        ]
+
+    def save(self, *args, **kwargs):
+        self.codigo = str(self.codigo or "").strip()
+        self.nome = str(self.nome or "").strip()
+        self.slug = str(self.slug or "").strip().lower()
+        self.sigla = str(self.sigla or "").strip().upper()
+        self.cor_principal = str(self.cor_principal or "#64748b").strip() or "#64748b"
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.codigo} - {self.nome}" if self.codigo else self.nome
 
 
 class KeycloakUser(models.Model):

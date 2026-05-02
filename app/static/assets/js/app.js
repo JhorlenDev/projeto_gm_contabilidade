@@ -377,7 +377,15 @@
   }
 
   function normalizePanelView(view) {
-    if (view === "clientes" || view === "conciliador" || view === "perfis" || view === "contabilidade") {
+    if (
+      view === "clientes" ||
+      view === "conciliador" ||
+      view === "perfis" ||
+      view === "contabilidade" ||
+      view === "bancos" ||
+      view === "financeiro" ||
+      view === "seguranca"
+    ) {
       return view;
     }
     return "dashboard";
@@ -1180,9 +1188,9 @@
     const clientCode = formatClientCode(client.codigo) || "";
     const docLabel = card.querySelector("[data-client-cpf-cnpj-label]");
     if (clientCode) {
-      docLabel.innerHTML = `<span>${formattedDoc}</span> <span>Código: ${clientCode}</span>`;
+      docLabel.textContent = `CNPJ: ${formattedDoc}        Código: ${clientCode}`;
     } else {
-      updateText(docLabel, formattedDoc);
+      updateText(docLabel, `CNPJ: ${formattedDoc}`);
     }
     applyClientStatusPill(card.querySelector("[data-client-status-pill]"), client.situacao_label || client.situacao);
 
@@ -1314,6 +1322,27 @@
       nome: String(record?.nome || "").trim(),
       cnpj: String(record?.cnpj || "").trim(),
     }));
+  }
+
+  function normalizeBancoRecord(record) {
+    return {
+      id: String(record?.id || "").trim(),
+      codigo: String(record?.codigo || "").trim(),
+      nome: String(record?.nome || "").trim(),
+      slug: String(record?.slug || "").trim(),
+      sigla: String(record?.sigla || "").trim(),
+      cor_principal: String(record?.cor_principal || "#64748b").trim() || "#64748b",
+      logo_url: String(record?.logo_url || "").trim(),
+      ativo: record?.ativo !== false,
+      criado_em: String(record?.criado_em || "").trim(),
+      atualizado_em: String(record?.atualizado_em || "").trim(),
+    };
+  }
+
+  async function loadBancosFromApi(session, { todos = false } = {}) {
+    const payload = await apiRequest(session, `/bancos/${todos ? "?ativo=" : "?ativo=true"}`);
+    const records = Array.isArray(payload) ? payload : (payload?.results || []);
+    return records.map(normalizeBancoRecord);
   }
 
   function getConciliadorCompanySelect() {
@@ -2324,6 +2353,250 @@
     setStatus("Selecione um escritório e uma empresa para começar.");
   }
 
+  function setupBancosCrud(session) {
+    const panel = document.querySelector('[data-panel-view-section="bancos"]');
+    if (!panel) return;
+
+    const tbody = panel.querySelector("[data-banco-tbody]");
+    const emptyRow = panel.querySelector("[data-banco-empty]");
+    const searchInput = panel.querySelector("[data-banco-search]");
+    const inativosInput = panel.querySelector("[data-banco-inativos]");
+    const newButton = panel.querySelector("[data-banco-new]");
+    const dialog = panel.querySelector("[data-banco-dialog]");
+    const form = panel.querySelector("[data-banco-form]");
+    const closeButtons = panel.querySelectorAll("[data-banco-close], [data-banco-cancel]");
+    const errorEl = panel.querySelector("[data-banco-error]");
+    const dialogLabel = panel.querySelector("[data-banco-dialog-label]");
+    const dialogTitle = panel.querySelector("[data-banco-dialog-title]");
+    const logoPreview = panel.querySelector("[data-banco-logo-preview]");
+    const logoImg = panel.querySelector("[data-banco-logo-img]");
+
+    if (!tbody || !form) return;
+
+    const state = {
+      bancos: [],
+      search: "",
+      showInativos: false,
+      editingId: "",
+    };
+
+    function normalizeBancoText(value) {
+      return String(value || "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase()
+        .trim();
+    }
+
+    function bancoMatchesSearch(banco) {
+      const query = normalizeBancoText(state.search);
+      if (!query) return true;
+      return [banco.nome, banco.codigo, banco.sigla, banco.slug].some((value) => normalizeBancoText(value).includes(query));
+    }
+
+    function currentBancos() {
+      return state.bancos
+        .filter((banco) => state.showInativos || banco.ativo)
+        .filter(bancoMatchesSearch)
+        .sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
+    }
+
+    function renderBancos() {
+      const bancos = currentBancos();
+      const rows = bancos.map((banco) => {
+        const logo = banco.logo_url
+          ? `<span class="bancos-logo" style="--bank-color: ${escapeHtml(banco.cor_principal)}"><img src="${escapeHtml(banco.logo_url)}" alt="" loading="lazy" /></span>`
+          : `<span class="bancos-logo bancos-logo--fallback" style="--bank-color: ${escapeHtml(banco.cor_principal)}">${escapeHtml(banco.sigla || banco.codigo || "BK")}</span>`;
+        const statusClass = banco.ativo ? "contab-badge--ativo" : "contab-badge--inativo";
+        const statusLabel = banco.ativo ? "Ativo" : "Inativo";
+
+        return `
+          <tr data-banco-id="${escapeHtml(banco.id)}">
+            <td>
+              <div class="bancos-bank-cell">
+                ${logo}
+                <div>
+                  <strong>${escapeHtml(banco.nome)}</strong>
+                  <span>${escapeHtml(banco.slug || "-")}</span>
+                </div>
+              </div>
+            </td>
+            <td><span class="perfis-code">${escapeHtml(banco.codigo || "-")}</span></td>
+            <td>${escapeHtml(banco.sigla || "-")}</td>
+            <td><span class="bancos-color-chip" style="--bank-color: ${escapeHtml(banco.cor_principal)}"></span>${escapeHtml(banco.cor_principal || "-")}</td>
+            <td><span class="contab-badge ${statusClass}">${statusLabel}</span></td>
+            <td>
+              <div class="bancos-actions">
+                <button type="button" class="secondary icon-only" title="Editar" data-banco-edit="${escapeHtml(banco.id)}">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <button type="button" class="secondary icon-only" title="${banco.ativo ? "Desativar" : "Ativar"}" data-banco-toggle="${escapeHtml(banco.id)}">
+                  ${banco.ativo 
+                    ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M18.36 6.64a9 9 0 1 1-12.73 0" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><line x1="12" y1="2" x2="12" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>'
+                    : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><polyline points="22 4 12 14.01 9 11.01" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+                  }
+                </button>
+              </div>
+            </td>
+          </tr>
+        `;
+      }).join("");
+
+      tbody.innerHTML = rows || "";
+      if (emptyRow) {
+        emptyRow.hidden = bancos.length > 0;
+        if (!bancos.length) tbody.appendChild(emptyRow);
+      }
+    }
+
+    function setError(message = "") {
+      if (!errorEl) return;
+      errorEl.hidden = !message;
+      errorEl.textContent = message;
+    }
+
+    function buildSlug(value) {
+      return normalizeBancoText(value)
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+    }
+
+    function openDialog(banco = null) {
+      state.editingId = banco?.id || "";
+      form.reset();
+      setError("");
+
+      form.elements.id.value = banco?.id || "";
+      form.elements.nome.value = banco?.nome || "";
+      form.elements.codigo.value = banco?.codigo || "";
+      form.elements.slug.value = banco?.slug || "";
+      form.elements.sigla.value = banco?.sigla || "";
+      form.elements.cor_principal.value = banco?.cor_principal || "#64748b";
+      form.elements.ativo.checked = banco ? Boolean(banco.ativo) : true;
+
+      if (logoPreview && logoImg) {
+        if (banco?.logo_url) {
+          logoImg.src = banco.logo_url;
+          logoPreview.hidden = false;
+        } else {
+          logoPreview.hidden = true;
+        }
+      }
+
+      if (dialogLabel) dialogLabel.textContent = banco ? "Editar banco" : "Novo banco";
+      if (dialogTitle) dialogTitle.textContent = banco ? banco.nome : "Cadastro de banco";
+
+      if (typeof dialog?.showModal === "function") dialog.showModal();
+      else dialog?.setAttribute("open", "");
+    }
+
+    function closeDialog() {
+      if (typeof dialog?.close === "function") dialog.close();
+      else dialog?.removeAttribute("open");
+    }
+
+    async function loadBancos() {
+      try {
+        state.bancos = await loadBancosFromApi(session, { todos: true });
+        window.__GM_BANCOS__ = state.bancos.filter((banco) => banco.ativo);
+        window.dispatchEvent(new CustomEvent("gm:bancos-updated", { detail: { bancos: window.__GM_BANCOS__ } }));
+      } catch (error) {
+        logError("Falha ao carregar bancos.", error);
+        state.bancos = [];
+      } finally {
+        renderBancos();
+      }
+    }
+
+    async function saveBanco() {
+      const payload = new FormData();
+      const logoFile = form.elements.logo.files?.[0] || null;
+      const removerLogo = form.elements.remover_logo?.checked || false;
+      payload.append("nome", form.elements.nome.value.trim());
+      payload.append("codigo", form.elements.codigo.value.trim());
+      payload.append("slug", form.elements.slug.value.trim());
+      payload.append("sigla", form.elements.sigla.value.trim());
+      payload.append("cor_principal", form.elements.cor_principal.value || "#64748b");
+      payload.append("ativo", form.elements.ativo.checked ? "true" : "false");
+      if (logoFile) payload.append("logo", logoFile);
+      if (removerLogo) payload.append("remover_logo", "true");
+
+      if (!payload.get("nome") || !payload.get("codigo") || !payload.get("slug")) {
+        throw new Error("Nome, código e slug são obrigatórios.");
+      }
+
+      const isEdit = Boolean(state.editingId);
+      const path = isEdit ? `/bancos/${state.editingId}/` : "/bancos/";
+      const method = isEdit ? "PATCH" : "POST";
+      return apiRequest(session, path, { method, body: payload });
+    }
+
+    newButton?.addEventListener("click", () => openDialog());
+    closeButtons.forEach((button) => button.addEventListener("click", closeDialog));
+    dialog?.addEventListener("click", (event) => {
+      if (event.target === dialog) closeDialog();
+    });
+
+    searchInput?.addEventListener("input", () => {
+      state.search = searchInput.value;
+      renderBancos();
+    });
+
+    inativosInput?.addEventListener("change", () => {
+      state.showInativos = inativosInput.checked;
+      renderBancos();
+    });
+
+    form.elements.nome?.addEventListener("input", () => {
+      if (!state.editingId && !form.elements.slug.value.trim()) {
+        form.elements.slug.value = buildSlug(form.elements.nome.value);
+      }
+    });
+
+    tbody.addEventListener("click", async (event) => {
+      const editButton = event.target.closest("[data-banco-edit]");
+      const toggleButton = event.target.closest("[data-banco-toggle]");
+
+      if (editButton) {
+        const banco = state.bancos.find((item) => item.id === editButton.dataset.bancoEdit);
+        if (banco) openDialog(banco);
+        return;
+      }
+
+      if (toggleButton) {
+        const banco = state.bancos.find((item) => item.id === toggleButton.dataset.bancoToggle);
+        if (!banco) return;
+        toggleButton.disabled = true;
+        try {
+          await apiRequest(session, `/bancos/${banco.id}/`, { method: "PATCH", body: { ativo: !banco.ativo } });
+          await loadBancos();
+        } catch (error) {
+          logError("Falha ao alternar banco.", error);
+        } finally {
+          toggleButton.disabled = false;
+        }
+      }
+    });
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      setError("");
+      const submit = panel.querySelector("[data-banco-submit]");
+      if (submit) submit.disabled = true;
+      try {
+        await saveBanco();
+        closeDialog();
+        await loadBancos();
+      } catch (error) {
+        setError(error.message || "Falha ao salvar banco.");
+      } finally {
+        if (submit) submit.disabled = false;
+      }
+    });
+
+    loadBancos();
+  }
+
   function setupClientsCrud(session) {
     const panel = document.querySelector('[data-panel-view-section="clientes"]');
     if (!panel) {
@@ -2428,6 +2701,8 @@
       "banco pan": { initials: "PAN", className: "pan" },
       bv: { initials: "BV", className: "bv" },
     };
+    let accountBankOptions = [...ACCOUNT_BANK_OPTIONS];
+    let bankVisuals = { ...BANK_VISUALS };
     const certificateStatus = panel.querySelector("[data-client-certificate-status]");
     const certificateMeta = panel.querySelector("[data-client-certificate-meta]");
     const certificateInput = panel.querySelector("[data-client-certificate-file]");
@@ -2485,6 +2760,7 @@
       certificate: null,
       certificateLoading: false,
       relationRequestToken: 0,
+      bancos: [],
     };
 
     let lastCustomBankValue = "";
@@ -2654,7 +2930,7 @@
         return alias;
       }
 
-      return ACCOUNT_BANK_OPTIONS.find((option) => normalizeBankValue(option) === normalized) || "";
+      return accountBankOptions.find((option) => normalizeBankValue(option) === normalized) || "";
     }
 
     function makeBankInitials(value) {
@@ -2677,12 +2953,58 @@
       }
 
       const bankName = resolveKnownBank(account.banco) || account.banco || "Conta bancária";
-      const visual = BANK_VISUALS[normalizeBankValue(bankName)];
+      const visual = bankVisuals[normalizeBankValue(bankName)];
       return {
         label: bankName,
         initials: visual?.initials || makeBankInitials(bankName),
         className: visual?.className || "other",
+        color: visual?.color || "#64748b",
+        logoUrl: visual?.logoUrl || "",
       };
+    }
+
+    function populateAccountBankOptions(bancos = []) {
+      const bankSelect = clientAccountFormFields.bankSelect;
+      if (!bankSelect) {
+        return;
+      }
+
+      const activeBanks = bancos.filter((banco) => banco.ativo && banco.nome);
+      accountBankOptions = activeBanks.length ? activeBanks.map((banco) => banco.nome) : [...ACCOUNT_BANK_OPTIONS];
+      bankVisuals = { ...BANK_VISUALS };
+
+      activeBanks.forEach((banco) => {
+        bankVisuals[normalizeBankValue(banco.nome)] = {
+          initials: banco.sigla || makeBankInitials(banco.nome),
+          className: "custom",
+          color: banco.cor_principal || "#64748b",
+          logoUrl: banco.logo_url || "",
+        };
+      });
+
+      const currentValue = bankSelect.value;
+      bankSelect.replaceChildren();
+
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.textContent = "Selecione o banco";
+      bankSelect.appendChild(placeholder);
+
+      accountBankOptions.forEach((nome) => {
+        const option = document.createElement("option");
+        option.value = nome;
+        option.textContent = nome;
+        bankSelect.appendChild(option);
+      });
+
+      const otherOption = document.createElement("option");
+      otherOption.value = ACCOUNT_BANK_OTHER_VALUE;
+      otherOption.textContent = "Outro";
+      bankSelect.appendChild(otherOption);
+
+      if (currentValue && Array.from(bankSelect.options).some((option) => option.value === currentValue)) {
+        bankSelect.value = currentValue;
+      }
     }
 
     function syncAccountBankField() {
@@ -3011,27 +3333,39 @@
           : (account.numero || "—");
         const statusLabel = account.ativo ? "Ativa" : "Inativa";
         const statusClass = account.ativo ? "status-ok" : "status-error";
+        const bankLogoStyle = bankVisual.color ? ` style="--bank-color: ${escapeHtml(bankVisual.color)}"` : "";
+        const bankLogoContent = bankVisual.logoUrl
+          ? `<img src="${escapeHtml(bankVisual.logoUrl)}" alt="" loading="lazy" />`
+          : escapeHtml(bankVisual.initials);
 
         return `
           <article class="client-account-item" data-client-account-id="${escapeHtml(account.id)}">
             <div class="client-account-item-head">
               <div class="client-account-main">
-                <span class="client-bank-logo client-bank-logo--${escapeHtml(bankVisual.className)}" title="${escapeHtml(bankVisual.label)}" aria-hidden="true">${escapeHtml(bankVisual.initials)}</span>
+                <span class="client-bank-logo client-bank-logo--${escapeHtml(bankVisual.className)}" title="${escapeHtml(bankVisual.label)}" aria-hidden="true"${bankLogoStyle}>${bankLogoContent}</span>
                 <div class="client-account-item-title">
                   <strong>${escapeHtml(bankLabel)}</strong>
                   <span>Agência: ${escapeHtml(account.agencia || "—")}</span>
                   <span>Conta: ${escapeHtml(accountLabel)}</span>
                 </div>
               </div>
-              <span class="client-related-badge ${statusClass}">${statusLabel}</span>
-            </div>
-            ${account.observacoes ? `<div class="client-account-item-meta">${escapeHtml(account.observacoes)}</div>` : ""}
-            ${canManage ? `
-              <div class="client-account-item-actions">
-                <button type="button" class="secondary" data-client-account-edit>Editar</button>
-                <button type="button" class="secondary" data-client-account-toggle>${account.ativo ? "Desativar" : "Ativar"}</button>
+              <div class="client-account-right">
+                <span class="client-related-badge ${statusClass}">${statusLabel}</span>
+                ${canManage ? `
+                  <div class="client-account-item-actions">
+                    <button type="button" class="secondary icon-only" title="Editar" data-client-account-edit>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    </button>
+                    <button type="button" class="secondary icon-only" title="${account.ativo ? "Desativar" : "Ativar"}" data-client-account-toggle>
+                      ${account.ativo 
+                        ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M18.36 6.64a9 9 0 1 1-12.73 0" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><line x1="12" y1="2" x2="12" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>'
+                        : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><polyline points="22 4 12 14.01 9 11.01" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+                      }
+                    </button>
+                  </div>
+                ` : ""}
               </div>
-            ` : ""}
+            </div>
           </article>
         `;
       }).join("");
@@ -3854,7 +4188,16 @@
     async function reloadClients() {
       state.loading = true;
       try {
-        state.clients = await loadClientsFromApi(session);
+        const [clients, bancos] = await Promise.all([
+          loadClientsFromApi(session),
+          loadBancosFromApi(session).catch((error) => {
+            logError("Falha ao carregar bancos para contas.", error);
+            return [];
+          }),
+        ]);
+        state.clients = clients;
+        state.bancos = bancos;
+        populateAccountBankOptions(bancos);
         state.error = "";
         updateDashboardStats(state.clients);
       } catch (error) {
@@ -3866,6 +4209,13 @@
         renderState();
       }
     }
+
+    window.addEventListener("gm:bancos-updated", (event) => {
+      const bancos = Array.isArray(event.detail?.bancos) ? event.detail.bancos.map(normalizeBancoRecord) : [];
+      state.bancos = bancos;
+      populateAccountBankOptions(bancos);
+      renderAccounts();
+    });
 
     async function saveClient() {
       const payload = getClientFormData(form);
@@ -4782,6 +5132,7 @@
     const comprovanteLabel = panel.querySelector("[data-comprovante-file-label]");
     const comprovanteDropzone = panel.querySelector("[data-comprovante-dropzone]");
     const submitBtn = panel.querySelector("[data-extrato-submit]");
+    const clearSelectionBtn = panel.querySelector("[data-extrato-clear]");
     const errorEl = panel.querySelector("[data-extrato-error]");
     const resultCard = panel.querySelector("[data-extrato-result]");
     const metaEl = panel.querySelector("[data-extrato-meta]");
@@ -4858,6 +5209,26 @@
     function updateFileLabel(file) {
       if (fileLabel) fileLabel.textContent = file.name;
       if (dropzone) dropzone.dataset.hasFile = "true";
+    }
+
+    function clearVisualSelections() {
+      fileInput.value = "";
+      if (comprovanteInput) comprovanteInput.value = "";
+      if (fileLabel) fileLabel.textContent = "Clique ou arraste o PDF aqui";
+      if (comprovanteLabel) comprovanteLabel.textContent = "Clique para selecionar (múltiplos PDFs)";
+      if (dropzone) {
+        dropzone.dataset.hasFile = "false";
+        dropzone.classList.remove("is-drag-over");
+      }
+      if (comprovanteDropzone) {
+        comprovanteDropzone.dataset.hasFile = "false";
+        comprovanteDropzone.classList.remove("is-drag-over");
+      }
+      setError("");
+    }
+
+    if (clearSelectionBtn) {
+      clearSelectionBtn.addEventListener("click", clearVisualSelections);
     }
 
     if (comprovanteDropzone && comprovanteInput) {
@@ -6474,7 +6845,7 @@
       const hasRole = session.roles.includes(CONFIG.keycloak.requiredRole);
       sessionBadge.className = hasRole ? "status-ok" : "status-error";
       sessionBadge.innerHTML = hasRole 
-        ? `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg> Acesso liberado`
+        ? `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3 4 6.5v5.4c0 4.4 3.1 7.9 8 9.1 4.9-1.2 8-4.7 8-9.1V6.5L12 3Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="m8.8 12 2.1 2.1 4.4-4.7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg> Acesso autorizado`
         : `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg> Sem acesso`;
     }
 
@@ -6676,6 +7047,7 @@
     try {
       runPanelSetup("navegação", setupPanelNavigation);
       runPanelSetup("clientes", () => setupClientsCrud(session));
+      runPanelSetup("bancos", () => setupBancosCrud(session));
       runPanelSetup("perfis", () => setupPerfisCrud(session));
       runPanelSetup("contabilidade", () => setupContabilidadeCrud(session));
       runPanelSetup("extrato", () => setupExtratoImport(session));
@@ -6683,9 +7055,14 @@
       setPanelView(getInitialPanelView(), { updateUrl: false });
 
       if (sessionStatus) {
-        sessionStatus.textContent = setupErrors.length
-          ? `USER-GM OK · ${setupErrors.length} módulo(s) com erro`
-          : (session.roles.includes(CONFIG.keycloak.requiredRole) ? "USER-GM OK" : "SEM USER-GM");
+        const hasRequiredRole = session.roles.includes(CONFIG.keycloak.requiredRole);
+        const verifiedIcon = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3 4 6.5v5.4c0 4.4 3.1 7.9 8 9.1 4.9-1.2 8-4.7 8-9.1V6.5L12 3Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="m8.8 12 2.1 2.1 4.4-4.7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+        const authorizedLabel = setupErrors.length
+          ? `${verifiedIcon} Acesso autorizado · ${setupErrors.length} módulo(s) com erro`
+          : `${verifiedIcon} Acesso autorizado`;
+
+        sessionStatus.innerHTML = hasRequiredRole ? authorizedLabel : "Sem acesso";
+        sessionStatus.title = hasRequiredRole ? `Você possui a role ${CONFIG.keycloak.requiredRole}` : "Role obrigatória ausente.";
       }
 
       if (logoutButton) {

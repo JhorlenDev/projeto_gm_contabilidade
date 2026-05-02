@@ -7,7 +7,7 @@ from pathlib import Path
 from django.utils import timezone
 from rest_framework import serializers
 
-from .models import Cliente, ContaCliente, CertificadoDigitalCliente, Escritorio, HistoricoContabil, ImportacaoExtrato, PerfilConciliacao, PlanoContas, RegraConciliador, TransacaoImportada, TipoArquivo, TipoComparacao, TipoContaCliente, TipoMovimento
+from .models import Banco, Cliente, ContaCliente, CertificadoDigitalCliente, Escritorio, HistoricoContabil, ImportacaoExtrato, PerfilConciliacao, PlanoContas, RegraConciliador, TransacaoImportada, TipoArquivo, TipoComparacao, TipoContaCliente, TipoMovimento
 
 
 def _normalize_situacao(value: str) -> str:
@@ -700,3 +700,67 @@ class HistoricoContabilSerializer(serializers.ModelSerializer):
         extra_kwargs = {
             "grupo": {"required": False, "allow_blank": True},
         }
+
+
+class BancoSerializer(serializers.ModelSerializer):
+    logo_url = serializers.SerializerMethodField()
+    remover_logo = serializers.BooleanField(write_only=True, required=False, default=False)
+
+    class Meta:
+        model = Banco
+        fields = [
+            "id",
+            "codigo",
+            "nome",
+            "slug",
+            "sigla",
+            "cor_principal",
+            "logo",
+            "logo_url",
+            "ativo",
+            "remover_logo",
+            "criado_em",
+            "atualizado_em",
+        ]
+        read_only_fields = ["id", "logo_url", "criado_em", "atualizado_em"]
+        extra_kwargs = {
+            "sigla": {"required": False, "allow_blank": True},
+            "cor_principal": {"required": False, "allow_blank": True},
+            "logo": {"required": False, "allow_empty_file": False},
+        }
+
+    def validate_codigo(self, value):
+        return _strip_text(value)
+
+    def validate_nome(self, value):
+        return _strip_text(value)
+
+    def validate_slug(self, value):
+        return _strip_text(value).lower()
+
+    def validate_sigla(self, value):
+        return _strip_text(value).upper()
+
+    def validate_cor_principal(self, value):
+        value = _strip_text(value) or "#64748b"
+        if not value.startswith("#"):
+            value = f"#{value}"
+        return value
+
+    def create(self, validated_data):
+        validated_data.pop("remover_logo", False)
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        remover_logo = validated_data.pop("remover_logo", False)
+        if remover_logo and instance.logo:
+            instance.logo.delete(save=True)
+        return super().update(instance, validated_data)
+
+    def get_logo_url(self, obj):
+        if not obj.logo:
+            return ""
+        request = self.context.get("request")
+        if request is not None:
+            return request.build_absolute_uri(obj.logo.url)
+        return obj.logo.url

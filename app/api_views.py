@@ -24,6 +24,7 @@ from services.pdf_parser import process_extrato_pdf
 from services.parsers.comprovante import parse_comprovante_pdf
 
 from .models import (
+    Banco,
     CertificadoDigitalCliente,
     Cliente,
     ContaCliente,
@@ -38,6 +39,7 @@ from .models import (
     TransacaoImportada,
 )
 from .serializers import (
+    BancoSerializer,
     ClienteSerializer,
     CertificadoDigitalClienteSerializer,
     ContaClienteSerializer,
@@ -206,6 +208,37 @@ class EscritorioViewSet(viewsets.ModelViewSet):
     search_fields = ["nome", "cnpj"]
     ordering_fields = ["nome", "cnpj", "criado_em"]
     ordering = ["nome"]
+
+
+class BancoViewSet(viewsets.ModelViewSet):
+    authentication_classes = [KeycloakJWTAuthentication]
+    permission_classes = [HasUserGMRole]
+    serializer_class = BancoSerializer
+    queryset = Banco.objects.all()
+    lookup_field = "id"
+    lookup_value_regex = r"[0-9a-fA-F-]{36}"
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ["codigo", "nome", "slug", "sigla"]
+    ordering_fields = ["codigo", "nome", "ativo", "criado_em", "atualizado_em"]
+    ordering = ["nome"]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        ativo = self.request.query_params.get("ativo")
+
+        if ativo in {"true", "1", "yes"}:
+            queryset = queryset.filter(ativo=True)
+        elif ativo in {"false", "0", "no"}:
+            queryset = queryset.filter(ativo=False)
+
+        return queryset
+
+    def destroy(self, request, *args, **kwargs):
+        banco = self.get_object()
+        banco.ativo = False
+        banco.save(update_fields=["ativo", "atualizado_em"])
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class RegraConciliadorViewSet(viewsets.ModelViewSet):

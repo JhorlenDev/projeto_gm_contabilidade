@@ -1,0 +1,120 @@
+<section class="panel-view" data-panel-view-section="bancos">
+  <section class="bancos-header card">
+    <div class="bancos-copy">
+      <h2>Bancos</h2>
+      <p>Cadastre bancos, códigos, cores e logos usados nos vínculos bancários dos clientes.</p>
+    </div>
+    <button class="primary bancos-new-btn" type="button" data-banco-new>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+      </svg>
+      Novo banco
+    </button>
+  </section>
+
+  <section class="content-grid content-grid--single">
+    <article class="card bancos-card">
+      <div class="bancos-toolbar">
+        <div class="bancos-search-wrap">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle cx="11" cy="11" r="8" stroke="currentColor" stroke-width="1.8"/>
+            <path d="m21 21-4.35-4.35" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+          </svg>
+          <input type="search" data-banco-search placeholder="Pesquisar por nome, código ou sigla..." autocomplete="off" />
+        </div>
+        <label class="bancos-toggle">
+          <input type="checkbox" data-banco-inativos />
+          <span>Mostrar inativos</span>
+        </label>
+      </div>
+
+      <div class="bancos-table-wrap">
+        <table class="bancos-table">
+          <thead>
+            <tr>
+              <th>Banco</th>
+              <th>Código</th>
+              <th>Sigla</th>
+              <th>Cor</th>
+              <th>Status</th>
+              <th>Ações</th>
+            </tr>
+          </thead>
+          <tbody data-banco-tbody>
+            <tr data-banco-empty>
+              <td colspan="6" class="empty-state">Nenhum banco cadastrado.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </article>
+  </section>
+
+  <dialog class="bancos-dialog" data-banco-dialog aria-modal="true" aria-labelledby="bancoDialogTitle">
+    <div class="bancos-dialog-inner">
+      <div class="bancos-dialog-head">
+        <div>
+          <p class="bancos-dialog-label" data-banco-dialog-label>Novo banco</p>
+          <h3 id="bancoDialogTitle" data-banco-dialog-title>Cadastro de banco</h3>
+        </div>
+        <button class="bancos-dialog-close" type="button" data-banco-close aria-label="Fechar">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M18 6 6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>
+
+      <form class="bancos-form" data-banco-form enctype="multipart/form-data" novalidate>
+        <input type="hidden" name="id" />
+        <div class="bancos-form-grid">
+          <label>
+            <span>Nome <em>*</em></span>
+            <input type="text" name="nome" placeholder="Ex: Banco do Brasil" autocomplete="off" required />
+          </label>
+          <label>
+            <span>Código <em>*</em></span>
+            <input type="text" name="codigo" placeholder="Ex: 001" autocomplete="off" required />
+          </label>
+          <label>
+            <span>Slug <em>*</em></span>
+            <input type="text" name="slug" placeholder="Ex: banco-do-brasil" autocomplete="off" required />
+          </label>
+          <label>
+            <span>Sigla</span>
+            <input type="text" name="sigla" placeholder="Ex: BB" autocomplete="off" maxlength="8" />
+          </label>
+          <label>
+            <span>Cor principal</span>
+            <input type="color" name="cor_principal" value="#64748b" />
+          </label>
+          <label>
+            <span>Logo</span>
+            <input type="file" name="logo" accept=".png,.jpg,.jpeg,.svg,.webp" />
+            <div class="bancos-logo-preview" data-banco-logo-preview hidden>
+              <img data-banco-logo-img src="" alt="Logo atual" />
+              <label class="bancos-logo-remove">
+                <input type="checkbox" name="remover_logo" />
+                <span>Remover logo</span>
+              </label>
+            </div>
+          </label>
+          <label class="bancos-check">
+            <input type="checkbox" name="ativo" checked />
+            <span>Ativo</span>
+          </label>
+        </div>
+        <p class="bancos-form-error" data-banco-error hidden></p>
+        <div class="bancos-form-actions">
+          <button class="secondary" type="button" data-banco-cancel>Cancelar</button>
+          <button class="primary" type="submit" data-banco-submit>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+              <path d="M17 21v-8H7v8M7 3v5h8" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+            </svg>
+            Salvar banco
+          </button>
+        </div>
+      </form>
+    </div>
+  </dialog>
+</section>

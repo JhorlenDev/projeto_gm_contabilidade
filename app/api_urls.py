@@ -2,6 +2,7 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
 from .api_views import (
+    BancoViewSet,
     CertificadoDigitalClienteViewSet,
     ClienteViewSet,
     ComprovantePreviw,
@@ -24,6 +25,7 @@ router = DefaultRouter()
 router.register(r"clientes", ClienteViewSet, basename="clientes")
 router.register(r"contas-clientes", ContaClienteViewSet, basename="contas-clientes")
 router.register(r"certificados-clientes", CertificadoDigitalClienteViewSet, basename="certificados-clientes")
+router.register(r"bancos", BancoViewSet, basename="bancos")
 router.register(r"escritorios", EscritorioViewSet, basename="escritorios")
 router.register(r"conciliador-importacoes", ImportacaoExtratoViewSet, basename="conciliador-importacoes")
 router.register(r"conciliador-transacoes", TransacaoImportadaViewSet, basename="conciliador-transacoes")
