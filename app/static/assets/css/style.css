@@ -602,8 +602,8 @@ body[data-page="panel"] .conciliador-header {
   background: #fff;
   padding: 24px 26px;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  align-items: flex-start;
+  justify-content: flex-start;
   gap: 18px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
 }
@@ -616,10 +616,6 @@ body[data-page="panel"] .conciliador-header h2 {
 body[data-page="panel"] .conciliador-header p {
   font-size: 0.9rem;
   color: #888;
-}
-
-body[data-page="panel"] .conciliador-header > div:last-child {
-  margin-left: auto;
 }
 
 body[data-page="panel"] .conciliador-toolbar {
@@ -653,7 +649,7 @@ body[data-page="panel"] .clients-header::after,
 body[data-page="panel"] .conciliador-header::after {
   content: "";
   position: absolute;
-  right: -64px;
+  left: -64px;
   top: -72px;
   width: 240px;
   height: 240px;

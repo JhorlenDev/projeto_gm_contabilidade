@@ -4790,6 +4790,15 @@
     const tbody = panel.querySelector("[data-extrato-tbody]");
     const searchInput = panel.querySelector("[data-extrato-search]");
     const filterChips = Array.from(panel.querySelectorAll("[data-extrato-natureza-filter]"));
+
+    // Função auxiliar para normalizar nomes de banco
+    function normalizeBankValue(value) {
+      return String(value || "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase()
+        .trim();
+    }
     const totalsEl = panel.querySelector("[data-extrato-totals]");
     const totalCreditoEl = panel.querySelector("[data-extrato-total-credito]");
     const totalDebitoEl = panel.querySelector("[data-extrato-total-debito]");
@@ -5971,6 +5980,41 @@
           agencia: payload.agencia || "",
           conta: payload.conta || "",
         };
+
+        // Atualiza o select do banco com o banco detectado
+        const bancoSelect = form.elements.namedItem("banco");
+        if (bancoSelect && payload.banco && payload.banco !== "auto") {
+          const detectedBank = String(payload.banco).toLowerCase().trim();
+          const normalizedBank = normalizeBankValue(detectedBank);
+          let foundOption = null;
+          
+          // Palavras-chave do banco detectado (ex: "bradesco" -> ["bradesco", "net", "empresa"])
+          const bankKeywords = normalizedBank.split(/\s+/).filter(Boolean);
+          
+          // Tenta encontrar a opção pelo value ou texto
+          for (const opt of bancoSelect.options) {
+            if (!opt.value || opt.value === "auto") continue;
+            
+            const optText = opt.textContent.toLowerCase();
+            const optValue = opt.value.toLowerCase();
+            const optNormalized = normalizeBankValue(optValue);
+            
+            // Compara palavras-chave contra valor opções
+            const matchKeywords = bankKeywords.filter(kw => 
+              optValue.includes(kw) || optText.includes(kw) || optNormalized.includes(kw)
+            );
+            
+            // Se tiver pelo menos uma palavra-chave que matches
+            if (matchKeywords.length > 0) {
+              foundOption = opt;
+              break;
+            }
+          }
+          
+          if (foundOption) {
+            bancoSelect.value = foundOption.value;
+          }
+        }
 
         updateCounts();
         setActiveChip("TODOS");

@@ -200,6 +200,37 @@
   <!-- Resultado da extração -->
   <section class="card extrato-result-card" data-extrato-result hidden>
 
+    <!-- Barra de filtros (à esquerda) -->
+    <div class="extrato-filter-bar">
+      <div class="extrato-filter-chips">
+        <button type="button" class="extrato-chip is-active" data-extrato-natureza-filter="TODOS">
+          Todos
+          <span class="extrato-chip-count" data-extrato-count-todos>0</span>
+        </button>
+        <button type="button" class="extrato-chip extrato-chip--debito" data-extrato-natureza-filter="CREDITO">
+          Débito
+          <span class="extrato-chip-count" data-extrato-count-credito>0</span>
+        </button>
+        <button type="button" class="extrato-chip extrato-chip--credito" data-extrato-natureza-filter="DEBITO">
+          Crédito
+          <span class="extrato-chip-count" data-extrato-count-debito>0</span>
+        </button>
+        <button type="button" class="extrato-chip extrato-chip--indefinido" data-extrato-natureza-filter="INDEFINIDA">
+          Indefinido
+          <span class="extrato-chip-count" data-extrato-count-indefinido>0</span>
+        </button>
+        <button type="button" class="extrato-chip extrato-chip--sem-regra" data-extrato-natureza-filter="SEM_REGRA">
+          Sem regra
+          <span class="extrato-chip-count" data-extrato-count-sem-regra>0</span>
+        </button>
+      </div>
+
+      <!-- Busca -->
+      <div class="extrato-search-wrap">
+        <input type="search" class="perfis-search" placeholder="Buscar no histórico..." data-extrato-search />
+      </div>
+    </div>
+
     <!-- Info do extrato -->
     <div class="extrato-result-header" data-extrato-result-header>
       <div class="extrato-result-meta" data-extrato-meta></div>
@@ -236,37 +267,6 @@
           </svg>
           Extrair XLS
         </button>
-      </div>
-    </div>
-
-    <!-- Barra de filtros -->
-    <div class="extrato-filter-bar">
-      <div class="extrato-filter-chips">
-        <button type="button" class="extrato-chip is-active" data-extrato-natureza-filter="TODOS">
-          Todos
-          <span class="extrato-chip-count" data-extrato-count-todos>0</span>
-        </button>
-        <button type="button" class="extrato-chip extrato-chip--debito" data-extrato-natureza-filter="CREDITO">
-          Débito
-          <span class="extrato-chip-count" data-extrato-count-credito>0</span>
-        </button>
-        <button type="button" class="extrato-chip extrato-chip--credito" data-extrato-natureza-filter="DEBITO">
-          Crédito
-          <span class="extrato-chip-count" data-extrato-count-debito>0</span>
-        </button>
-        <button type="button" class="extrato-chip extrato-chip--indefinido" data-extrato-natureza-filter="INDEFINIDA">
-          Indefinido
-          <span class="extrato-chip-count" data-extrato-count-indefinido>0</span>
-        </button>
-        <button type="button" class="extrato-chip extrato-chip--sem-regra" data-extrato-natureza-filter="SEM_REGRA">
-          Sem regra
-          <span class="extrato-chip-count" data-extrato-count-sem-regra>0</span>
-        </button>
-      </div>
-
-      <!-- Busca -->
-      <div class="extrato-search-wrap">
-        <input type="search" class="perfis-search" placeholder="Buscar no histórico..." data-extrato-search />
       </div>
     </div>
 
