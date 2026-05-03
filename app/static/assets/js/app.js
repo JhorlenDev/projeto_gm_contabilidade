@@ -5177,7 +5177,9 @@
       regrasMap: {},     // keyed por historicNormKey → { id, codDebito, codCredito, codHistorico }
       regrasFlexi: [],   // todas as regras ordenadas por prioridade (para matching CONTEM/IGUAL/COMECA_COM)
       clientes: [],      // lista completa de clientes carregados (para validação de CNPJ)
-      comprovantes: {},  // keyed por documento (string) → ComprovanteResult da API
+      comprovantes: [],  // lista bruta retornada pela API de comprovantes
+      comprovanteMatches: {},
+      comprovanteFileUrls: {},
       contasBancarias: [], // contas bancárias da empresa selecionada (para pré-preenchimento)
     };
 
@@ -5224,6 +5226,10 @@
         comprovanteDropzone.dataset.hasFile = "false";
         comprovanteDropzone.classList.remove("is-drag-over");
       }
+      releaseComprovanteFileUrls();
+      state.comprovantes = [];
+      state.comprovanteMatches = {};
+      hideDetalheComprovanteViewer();
       setError("");
     }
 
@@ -5273,6 +5279,19 @@
     // ── Upload e vinculação de comprovantes ───────────────────────────────
     async function uploadComprovantes(files) {
       try {
+        hideDetalheComprovanteViewer();
+        state.comprovantes = [];
+        state.comprovanteMatches = {};
+        releaseComprovanteFileUrls();
+
+        const fileUrlMap = {};
+        Array.from(files || []).forEach((file) => {
+          if (file?.name && !fileUrlMap[file.name]) {
+            fileUrlMap[file.name] = URL.createObjectURL(file);
+          }
+        });
+        state.comprovanteFileUrls = fileUrlMap;
+
         const fd = new FormData();
         for (const f of files) fd.append("arquivos", f);
         const resp = await fetch(apiUrl("/comprovante-preview/"), {
@@ -5280,18 +5299,26 @@
           headers: { Authorization: `Bearer ${session.accessToken}` },
           body: fd,
         });
-        if (!resp.ok) return;
+        if (!resp.ok) {
+          releaseComprovanteFileUrls();
+          return;
+        }
         const data = await resp.json();
-        // Indexa por documento (normalizado: sem zeros à esquerda)
-        state.comprovantes = {};
-        (data.comprovantes || []).forEach((c) => {
-          if (c.documento) {
-            state.comprovantes[c.documento] = c;
-          }
-        });
+        state.comprovantes = (Array.isArray(data.comprovantes) ? data.comprovantes : []).map((item) => normalizeComprovanteRecord({
+          ...item,
+          _arquivoUrl: item?.arquivo_nome ? (state.comprovanteFileUrls[item.arquivo_nome] || "") : "",
+        }));
+        recomputeComprovanteMatches();
+        recomputeTarifaMatches();
         // Re-renderiza tabela para mostrar indicadores de comprovante
+        updateCounts();
         renderTable();
+        if (state.detalheKey) {
+          const active = state.lancamentos.find((item) => lancamentoKey(item) === state.detalheKey);
+          if (active) openDetalhe(active);
+        }
       } catch (_) {
+        releaseComprovanteFileUrls();
         // Silencioso — comprovantes são opcionais
       }
     }
@@ -5301,6 +5328,19 @@
       if (!errorEl) return;
       errorEl.textContent = msg;
       errorEl.hidden = !msg;
+    }
+
+    function releaseComprovanteFileUrls() {
+      Object.values(state.comprovanteFileUrls || {}).forEach((url) => {
+        if (url) {
+          try {
+            URL.revokeObjectURL(url);
+          } catch (_) {
+            // noop
+          }
+        }
+      });
+      state.comprovanteFileUrls = {};
     }
 
     function normalizeCnpj(value) {
@@ -5318,6 +5358,417 @@
       return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(isFinite(num) ? num : 0);
     }
 
+    function normalizeDescricaoLancamento(value) {
+      return String(value || "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[-–—_/\\|]+/g, " ")
+        .replace(/[^\w\s]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toUpperCase();
+    }
+
+    function parseDateLike(value) {
+      if (!value) return null;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(String(value))) return String(value);
+      const match = String(value).match(/(\d{2})\/(\d{2})\/(\d{2,4})/);
+      if (!match) return null;
+      const [, day, month, yearRaw] = match;
+      const year = yearRaw.length === 2 ? `20${yearRaw}` : yearRaw;
+      return `${year}-${month}-${day}`;
+    }
+
+    function extractOccurrenceDateFromText(value, fallbackDate = null) {
+      const text = String(value || "");
+      const patterns = [
+        /OCORR(?:E|Ê)NCIA\s*(\d{2}\/\d{2}\/\d{2,4})/i,
+        /TAR\.?\s+AGRUPADAS\s*[-:]?\s*OCORR(?:E|Ê)NCIA\s*(\d{2}\/\d{2}\/\d{2,4})/i,
+      ];
+      for (const pattern of patterns) {
+        const match = text.match(pattern);
+        if (match?.[1]) {
+          return parseDateLike(match[1]);
+        }
+      }
+      return fallbackDate || null;
+    }
+
+    function classifyLancamentoTipo(record) {
+      const descricao = normalizeDescricaoLancamento(record?.historico || record?.descricao_original || record?.descricao || "");
+      const fallbackDate = parseDateLike(record?.data || record?.data_movimento || record?.data_lancamento_extrato);
+      if (descricao.includes("DEBITO SERVICO COBRANCA") || descricao.includes("TAR AGRUPADAS") || descricao.includes("TARIFAS AGRUPADAS")) {
+        return {
+          tipo_lancamento: "TARIFA_AGRUPADA",
+          data_ocorrencia: extractOccurrenceDateFromText(record?.historico || record?.descricao_original || "", fallbackDate),
+        };
+      }
+
+      if (
+        descricao.includes("TARIFA")
+        || descricao.includes("PACOTE SERVICOS")
+        || descricao.includes("PACOTE DE SERVICOS")
+        || descricao.includes("MANUTENCAO PJ")
+        || descricao.includes("SERVICO COBRANCA")
+      ) {
+        return {
+          tipo_lancamento: "TARIFA",
+          data_ocorrencia: extractOccurrenceDateFromText(record?.historico || record?.descricao_original || "", fallbackDate),
+        };
+      }
+
+      return {
+        tipo_lancamento: "PRINCIPAL",
+        data_ocorrencia: null,
+      };
+    }
+
+    function normalizeLancamentoRecord(record) {
+      const historico = String(record?.historico || record?.descricao_original || "").trim();
+      const valorOriginalBanco = parseFloat(record?.valor_original_do_banco ?? record?.valor ?? 0);
+      const metadata = classifyLancamentoTipo(record);
+      return {
+        ...record,
+        linha: record?.linha ?? record?.linha_origem ?? null,
+        linha_origem: record?.linha_origem ?? record?.linha ?? null,
+        data: record?.data || record?.data_movimento || null,
+        data_lancamento_extrato: record?.data_lancamento_extrato || record?.data || record?.data_movimento || null,
+        data_ocorrencia: record?.data_ocorrencia || metadata.data_ocorrencia || null,
+        historico,
+        descricao: historico,
+        descricao_original: historico,
+        descricao_normalizada: String(record?.descricao_normalizada || normalizeDescricaoLancamento(historico)).trim(),
+        documento: String(record?.documento || record?.dados_brutos?.DOCUMENTO || record?.dados_brutos?.documento || "").trim(),
+        natureza: String(record?.natureza || record?.tipo_movimento || record?.natureza_inferida || "INDEFINIDA").toUpperCase(),
+        valor: Number.isFinite(valorOriginalBanco) ? valorOriginalBanco : 0,
+        valor_original_do_banco: Number.isFinite(valorOriginalBanco) ? valorOriginalBanco : 0,
+        tipo_lancamento: String(record?.tipo_lancamento || metadata.tipo_lancamento || "PRINCIPAL").toUpperCase(),
+        lancamento_relacionado_key: record?.lancamento_relacionado_key || null,
+        status_vinculo_tarifa: String(record?.status_vinculo_tarifa || "NAO_APLICA").toUpperCase(),
+        confianca_vinculo: String(record?.confianca_vinculo || "BAIXA").toUpperCase(),
+        tarifa_esperada_valor: parseFloat(record?.tarifa_esperada_valor || 0) || 0,
+        comprovante_tipo: String(record?.comprovante_tipo || "").toUpperCase(),
+      };
+    }
+
+    function normalizeLancamentos(records) {
+      return (Array.isArray(records) ? records : []).map(normalizeLancamentoRecord);
+    }
+
+    function getLancamentoDescricaoNormalizada(l) {
+      return String(l?.descricao_normalizada || normalizeDescricaoLancamento(l?.historico || "")).trim();
+    }
+
+    function getNormalizedComponentDescription(component) {
+      return normalizeDescricaoLancamento(component?.descricao || "");
+    }
+
+    function isTarifaComponent(component) {
+      return inferTipoComponente(component) === "TARIFA";
+    }
+
+    function getComponentExportType(component) {
+      const tipo = inferTipoComponente(component);
+      return tipo || "OUTROS";
+    }
+
+    function normalizeComprovanteRecord(record) {
+      return {
+        ...record,
+        tipo: String(record?.tipo || "").toLowerCase(),
+        documento: String(record?.documento || "").trim(),
+        data_pagamento: record?.data_pagamento || null,
+        valor_documento: parseFloat(record?.valor_documento || 0) || 0,
+        valor_total: parseFloat(record?.valor_total || 0) || 0,
+        tarifa_valor: parseFloat(record?.tarifa_valor || 0) || 0,
+        juros_valor: parseFloat(record?.juros_valor || 0) || 0,
+        multa_valor: parseFloat(record?.multa_valor || 0) || 0,
+        desconto_valor: parseFloat(record?.desconto_valor || 0) || 0,
+        itens: Array.isArray(record?.itens) ? record.itens : [],
+      };
+    }
+
+    function getComprovanteOperationKind(comp) {
+      const tipo = String(comp?.tipo || "").toLowerCase();
+      if (tipo.includes("pix")) return "PIX";
+      if (tipo.includes("ted")) return "TED";
+      if (tipo.includes("boleto")) return "BOLETO";
+      if (tipo.includes("convenio") || tipo.includes("darf")) return "PAGAMENTO";
+      return "OUTRO";
+    }
+
+    function hasExpectedTarifa(comp) {
+      return (parseFloat(comp?.tarifa_valor || 0) || 0) > 0;
+    }
+
+    function hasDetalhamentoComprovante(comp) {
+      const itens = Array.isArray(comp?.itens) ? comp.itens : [];
+      return itens.some((item) => {
+        const descricao = getNormalizedComponentDescription(item);
+        return descricao && descricao !== "PRINCIPAL";
+      });
+    }
+
+    function shouldUseComprovanteComposition(comp) {
+      return ["BOLETO", "PAGAMENTO"].includes(getComprovanteOperationKind(comp)) && hasDetalhamentoComprovante(comp);
+    }
+
+    function getComprovanteDisplayBadges(comp) {
+      const labels = [];
+      if (!comp) return labels;
+      if (hasExpectedTarifa(comp)) labels.push("+ tarifa");
+      if (parseFloat(comp?.juros_valor || 0) > 0) labels.push("juros");
+      if (parseFloat(comp?.multa_valor || 0) > 0) labels.push("multa");
+      if (parseFloat(comp?.desconto_valor || 0) > 0) labels.push("desconto");
+      return labels;
+    }
+
+    function getTarifaTypeHints(comp, lancamento) {
+      const hints = [];
+      const op = getComprovanteOperationKind(comp);
+      const descricao = getLancamentoDescricaoNormalizada(lancamento);
+      if (op === "PIX") {
+        hints.push("PIX");
+        if (descricao.includes("RECEB")) hints.push("RECEB");
+        if (descricao.includes("ENVI")) hints.push("ENVI");
+      }
+      if (op === "TED") {
+        hints.push("TED", "TRANSFER");
+      }
+      return hints;
+    }
+
+    function getTarifaOccurrenceDate(lancamento) {
+      return lancamento?.data_ocorrencia || lancamento?.data_lancamento_extrato || lancamento?.data || null;
+    }
+
+    function matchesTarifaHint(tarifaLaunch, hints) {
+      if (!hints.length) return true;
+      const descricao = getLancamentoDescricaoNormalizada(tarifaLaunch);
+      return hints.some((hint) => descricao.includes(hint));
+    }
+
+    function getTarifaStatusMeta(status) {
+      const lookup = {
+        ENCONTRADA: { label: "tarifa vinculada", icon: "✔", tone: "ok" },
+        AGRUPADA: { label: "tarifa agrupada", icon: "⚠", tone: "warn" },
+        NAO_ENCONTRADA: { label: "tarifa pendente", icon: "❌", tone: "danger" },
+        NAO_APLICA: { label: "+ tarifa", icon: "+", tone: "info" },
+      };
+      return lookup[status] || lookup.NAO_APLICA;
+    }
+
+    function recomputeTarifaMatches() {
+      state.lancamentos.forEach((lancamento) => {
+        lancamento.lancamento_relacionado_key = null;
+        lancamento.status_vinculo_tarifa = "NAO_APLICA";
+        lancamento.confianca_vinculo = "BAIXA";
+        lancamento.tarifa_esperada_valor = 0;
+      });
+
+      if (!state.lancamentos.length || !state.comprovantes.length) return;
+
+      state.lancamentos.forEach((lancamento) => {
+        if (lancamento.tipo_lancamento !== "PRINCIPAL") {
+          return;
+        }
+
+        const comprovante = getMatchedComprovante(lancamento);
+        if (!comprovante || !hasExpectedTarifa(comprovante) || !["PIX", "TED"].includes(getComprovanteOperationKind(comprovante))) {
+          return;
+        }
+
+        lancamento.tarifa_esperada_valor = parseFloat(comprovante.tarifa_valor || 0) || 0;
+
+        const occurrenceDate = comprovante.data_pagamento || lancamento.data_lancamento_extrato || lancamento.data;
+        const hints = getTarifaTypeHints(comprovante, lancamento);
+        const candidates = state.lancamentos.filter((candidate) => candidate !== lancamento);
+
+        const individual = candidates.find((candidate) => (
+          candidate.tipo_lancamento === "TARIFA"
+          && Math.abs((parseFloat((candidate.valor_original_do_banco ?? candidate.valor ?? 0))) - lancamento.tarifa_esperada_valor) <= 0.01
+          && getTarifaOccurrenceDate(candidate) === occurrenceDate
+          && matchesTarifaHint(candidate, hints)
+        ));
+
+        if (individual) {
+          lancamento.lancamento_relacionado_key = lancamentoKey(individual);
+          lancamento.status_vinculo_tarifa = "ENCONTRADA";
+          lancamento.confianca_vinculo = "ALTA";
+          return;
+        }
+
+        const grouped = candidates.find((candidate) => (
+          candidate.tipo_lancamento === "TARIFA_AGRUPADA"
+          && getTarifaOccurrenceDate(candidate) === occurrenceDate
+        ));
+
+        if (grouped) {
+          lancamento.lancamento_relacionado_key = lancamentoKey(grouped);
+          lancamento.status_vinculo_tarifa = "AGRUPADA";
+          lancamento.confianca_vinculo = "MEDIA";
+          return;
+        }
+
+        lancamento.status_vinculo_tarifa = "NAO_ENCONTRADA";
+        lancamento.confianca_vinculo = "BAIXA";
+      });
+    }
+
+    const MATCH_STOPWORDS = new Set([
+      "BB", "PIX", "TED", "DOC", "TARIFA", "PAGAMENTO", "TRANSFERENCIA",
+      "RECEBIDO", "ENVIADO", "BOLETO", "CONVENIO", "COMPROVANTE", "PARA", "DE", "DO", "DA",
+      "E", "QR", "CODE", "BANCO", "RECEITA", "FEDERAL",
+    ]);
+
+    function buildMatchTokens(value) {
+      return new Set(
+        normalizeDescricaoLancamento(value)
+          .split(" ")
+          .filter((token) => token && token.length >= 3 && !MATCH_STOPWORDS.has(token))
+      );
+    }
+
+    function documentsRelated(docA, docB) {
+      const a = normalizeDoc(docA);
+      const b = normalizeDoc(docB);
+      if (!a || !b) return false;
+      if (a === b) return true;
+
+      const shorter = a.length <= b.length ? a : b;
+      const longer = a.length > b.length ? a : b;
+      if (shorter.length < 5) return false;
+
+      return longer.startsWith(shorter) || longer.endsWith(shorter) || longer.includes(shorter);
+    }
+
+    function valuesClose(valueA, valueB, tolerance = 0.01) {
+      return Math.abs((parseFloat(valueA) || 0) - (parseFloat(valueB) || 0)) <= tolerance;
+    }
+
+    function getTypeHintScore(lancamento, comprovante) {
+      const descricao = getLancamentoDescricaoNormalizada(lancamento);
+      const tipo = String(comprovante?.tipo || "").toUpperCase();
+      if (!descricao || !tipo) return 0;
+      if (tipo.includes("PIX") && descricao.includes("PIX")) return 8;
+      if (tipo.includes("BOLETO") && (descricao.includes("BOLETO") || descricao.includes("TITULO"))) return 8;
+      if ((tipo.includes("TED") || tipo.includes("TRANSFER")) && (descricao.includes("TED") || descricao.includes("TRANSFER"))) return 8;
+      if (tipo.includes("CONVENIO") && (descricao.includes("CONVENIO") || descricao.includes("PAGAMENTO"))) return 8;
+      if (tipo.includes("DARF") && (descricao.includes("DARF") || descricao.includes("RECEITA"))) return 8;
+      return 0;
+    }
+
+    function scoreComprovanteForLancamento(lancamento, comprovante) {
+      const lancDoc = normalizeDoc(lancamento?.documento);
+      const compDoc = normalizeDoc(comprovante?.documento);
+      const sameDoc = documentsRelated(lancDoc, compDoc);
+
+      if (lancDoc && compDoc && !sameDoc) {
+        return Number.NEGATIVE_INFINITY;
+      }
+
+      const sameValue = valuesClose(lancamento?.valor_original_do_banco ?? lancamento?.valor, comprovante?.valor_total);
+      const sameDate = Boolean(lancamento?.data && comprovante?.data_pagamento && String(lancamento.data) === String(comprovante.data_pagamento));
+
+      const lancTokens = buildMatchTokens(lancamento?.historico);
+      const beneficiarioTokens = buildMatchTokens(comprovante?.beneficiario);
+      let overlap = 0;
+      beneficiarioTokens.forEach((token) => {
+        if (lancTokens.has(token)) overlap += 1;
+      });
+
+      if (!sameDoc && !sameValue) {
+        return Number.NEGATIVE_INFINITY;
+      }
+
+      if (!sameDoc && !sameDate && overlap === 0) {
+        return Number.NEGATIVE_INFINITY;
+      }
+
+      let score = 0;
+      if (sameDoc) score += lancDoc === compDoc ? 120 : 100;
+      if (sameValue) score += 35;
+      if (sameDate) score += 20;
+      if (overlap >= 2) score += 22;
+      else if (overlap === 1) score += 12;
+      score += getTypeHintScore(lancamento, comprovante);
+      return score;
+    }
+
+    function recomputeComprovanteMatches() {
+      state.comprovanteMatches = {};
+      if (!state.lancamentos.length || !state.comprovantes.length) return;
+
+      const candidates = [];
+      state.lancamentos.forEach((lancamento) => {
+        state.comprovantes.forEach((comprovante, compIndex) => {
+          const score = scoreComprovanteForLancamento(lancamento, comprovante);
+          if (score >= 48) {
+            candidates.push({
+              lancamentoKey: lancamentoKey(lancamento),
+              compIndex,
+              score,
+            });
+          }
+        });
+      });
+
+      candidates.sort((a, b) => b.score - a.score);
+
+      const usedLancamentos = new Set();
+      const usedComprovantes = new Set();
+      candidates.forEach((candidate) => {
+        if (usedLancamentos.has(candidate.lancamentoKey) || usedComprovantes.has(candidate.compIndex)) {
+          return;
+        }
+        state.comprovanteMatches[candidate.lancamentoKey] = state.comprovantes[candidate.compIndex];
+        usedLancamentos.add(candidate.lancamentoKey);
+        usedComprovantes.add(candidate.compIndex);
+      });
+    }
+
+    function getMatchedComprovante(lancamento) {
+      return state.comprovanteMatches[lancamentoKey(lancamento)] || null;
+    }
+
+    function getResolvedComponentes(l) {
+      const key = lancamentoKey(l);
+      if (state.componentes[key]?.length) {
+        return state.componentes[key].map(normalizeComponente).filter((item) => item.valor !== 0);
+      }
+      const comp = getMatchedComprovante(l);
+      return buildInitialComponentes(l, comp).map(normalizeComponente).filter((item) => item.valor !== 0);
+    }
+
+    function getLancamentoValores(l, componentes = null) {
+      const comps = componentes || getResolvedComponentes(l);
+      const valorOriginalBanco = parseFloat((l?.valor_original_do_banco ?? l?.valor ?? 0)) || 0;
+      const valorPrincipal = comps
+        .filter((item) => inferTipoComponente(item) === "PRINCIPAL")
+        .reduce((total, item) => total + parseFloat(item.valor || 0), 0);
+      const juros = comps
+        .filter((item) => inferTipoComponente(item) === "JUROS")
+        .reduce((total, item) => total + parseFloat(item.valor || 0), 0);
+      const multa = comps
+        .filter((item) => inferTipoComponente(item) === "MULTA")
+        .reduce((total, item) => total + parseFloat(item.valor || 0), 0);
+      const desconto = comps
+        .filter((item) => inferTipoComponente(item) === "DESCONTO")
+        .reduce((total, item) => total + Math.abs(parseFloat(item.valor || 0)), 0);
+      const tarifa = parseFloat(l?.tarifa_esperada_valor || 0) || 0;
+      const totalPago = valorPrincipal + juros + multa - desconto;
+      return {
+        valorOriginalBanco,
+        valorPrincipal: valorPrincipal || (!comps.length ? valorOriginalBanco : 0),
+        juros,
+        multa,
+        desconto,
+        tarifa,
+        valorOriginalCalculado: totalPago,
+        totalPago: totalPago || valorOriginalBanco,
+      };
+    }
+
     function naturezaBadge(nat) {
       // Inversão contábil: crédito bancário = débito contábil, e vice-versa
       if (nat === "CREDITO") return '<span class="extrato-nat extrato-nat--debito">Débito</span>';
@@ -5325,9 +5776,18 @@
       return '<span class="extrato-nat extrato-nat--indefinido">Indefinido</span>';
     }
 
+    function getComponentCodingSummary(l) {
+      const key = lancamentoKey(l);
+      const comps = (state.componentes[key] || []).map(normalizeComponente);
+      return comps.find((component) => component.codDebito || component.codCredito || component.codHistorico) || null;
+    }
+
     function hasRegra(l) {
       const r = state.regras[lancamentoKey(l)];
-      return r && (r.codDebito || r.codCredito || r.codHistorico);
+      if (r && (r.codDebito || r.codCredito || r.codHistorico)) {
+        return true;
+      }
+      return Boolean(getComponentCodingSummary(l));
     }
 
     function filteredRows() {
@@ -5336,19 +5796,19 @@
         const isSemRegraFilter = state.filtroNatureza === "SEM_REGRA";
         const natMatch = state.filtroNatureza === "TODOS" || isSemRegraFilter || l.natureza === state.filtroNatureza;
         const semRegraMatch = !isSemRegraFilter || !hasRegra(l);
-        const textMatch = !query || normalizeSearchTerm(l.historico + " " + l.documento).includes(query);
+        const textMatch = !query || normalizeSearchTerm(`${l.historico} ${l.documento} ${l.descricao_normalizada || ""}`).includes(query);
         return natMatch && semRegraMatch && textMatch;
       });
     }
 
     function regraCell(l) {
-      const r = state.regras[lancamentoKey(l)];
+      const r = state.regras[lancamentoKey(l)] || getComponentCodingSummary(l);
       if (!r || (!r.codDebito && !r.codCredito && !r.codHistorico)) {
         return '<td class="extrato-td-regra extrato-td-regra--vazia"><span class="extrato-regra-vazia">—</span></td>';
       }
       // Acha o nome da regra no regrasFlexi pelo id
-      const def = state.regrasFlexi.find((x) => x.id === r.id);
-      const nome = def?.nome ? escapeHtml(def.nome.slice(0, 40)) : "";
+      const def = r.id ? state.regrasFlexi.find((x) => x.id === r.id) : null;
+      const nome = def?.nome ? escapeHtml(def.nome.slice(0, 40)) : "Lançamento";
       const codigos = [
         r.codDebito ? `<span class="extrato-regra-cod extrato-regra-cod--d" title="Débito">D: ${escapeHtml(r.codDebito)}</span>` : "",
         r.codCredito ? `<span class="extrato-regra-cod extrato-regra-cod--c" title="Crédito">C: ${escapeHtml(r.codCredito)}</span>` : "",
@@ -5368,19 +5828,32 @@
       tbody.innerHTML = rows.map((l) => {
         const key = lancamentoKey(l);
         const comps = state.componentes[key] || [];
-        const badge = comps.length > 0
+        const badge = comps.length > 1
           ? `<span class="detalhe-badge">${comps.length}</span>`
           : "";
-        const docKey = normalizeDoc(l.documento);
-        const compBadge = (docKey && state.comprovantes[docKey]?.itens?.length > 1)
-          ? `<span class="comprovante-badge" title="Comprovante vinculado">📎</span>`
+        const comprovante = getMatchedComprovante(l);
+        const tarifaMeta = hasExpectedTarifa(comprovante) ? getTarifaStatusMeta(l.status_vinculo_tarifa) : null;
+        const tarifaBadge = tarifaMeta
+          ? `<span class="comprovante-badge comprovante-badge--${escapeHtml(tarifaMeta.tone)}" title="Tarifa do comprovante">
+              <span>${escapeHtml(tarifaMeta.icon)}</span>
+              <span>${escapeHtml(tarifaMeta.label)}</span>
+            </span>`
+          : "";
+        const compositionLabels = shouldUseComprovanteComposition(comprovante) ? getComprovanteDisplayBadges(comprovante) : [];
+        const compositionBadge = compositionLabels.length
+          ? `<span class="comprovante-badge comprovante-badge--info" title="Composição do pagamento">${escapeHtml(compositionLabels.join(" · "))}</span>`
           : "";
         return `
         <tr data-extrato-row data-natureza="${escapeHtml(l.natureza)}" data-linha-key="${escapeHtml(key)}" class="extrato-row-clickable" title="Clique para detalhar">
           <td class="extrato-td-date">${escapeHtml(formatDateBR(l.data))}</td>
-          <td class="extrato-td-hist">${escapeHtml(l.historico)}${badge}${compBadge}</td>
+          <td class="extrato-td-hist">
+            <div class="extrato-hist-wrap">
+              <span class="extrato-hist-text">${escapeHtml(l.historico)}</span>
+              ${(badge || tarifaBadge || compositionBadge) ? `<span class="extrato-hist-indicators">${badge}${tarifaBadge}${compositionBadge}</span>` : ""}
+            </div>
+          </td>
           <td class="extrato-td-doc">${escapeHtml(l.documento || "—")}</td>
-          <td class="extrato-td-valor text-right">${escapeHtml(formatCurrency(l.valor))}</td>
+          <td class="extrato-td-valor text-right">${escapeHtml(formatCurrency(l.valor_original_do_banco ?? l.valor))}</td>
           <td>${naturezaBadge(l.natureza)}</td>
           ${regraCell(l)}
         </tr>
@@ -5388,9 +5861,8 @@
       }).join("");
 
       // Totais
-      const visibleAll = state.filtroNatureza === "TODOS" ? state.lancamentos : rows;
-      const totalC = state.lancamentos.filter((l) => l.natureza === "CREDITO").reduce((s, l) => s + parseFloat(l.valor || 0), 0);
-      const totalD = state.lancamentos.filter((l) => l.natureza === "DEBITO").reduce((s, l) => s + parseFloat(l.valor || 0), 0);
+      const totalC = state.lancamentos.filter((l) => l.natureza === "CREDITO").reduce((s, l) => s + parseFloat((l.valor_original_do_banco ?? l.valor ?? 0)), 0);
+      const totalD = state.lancamentos.filter((l) => l.natureza === "DEBITO").reduce((s, l) => s + parseFloat((l.valor_original_do_banco ?? l.valor ?? 0)), 0);
       if (totalCreditoEl) totalCreditoEl.textContent = formatCurrency(totalC);
       if (totalDebitoEl) totalDebitoEl.textContent = formatCurrency(totalD);
       if (totalSaldoEl) totalSaldoEl.textContent = formatCurrency(totalC - totalD);
@@ -5410,6 +5882,26 @@
       });
     }
 
+    function buildExtratoExportFilename() {
+      const clienteSelecionado = state.clientes.find((cliente) => cliente.id === state.empresaId);
+      const empresaNome = String(state.extratoMeta?.empresa_nome || clienteSelecionado?.nome || "").replace(/\s+/g, " ").trim();
+      const empresaCnpj = String(maskDocument(state.extratoMeta?.empresa_cnpj || clienteSelecionado?.cpf_cnpj || "")).trim();
+
+      if (empresaNome && empresaCnpj) {
+        return `${empresaNome} - ${empresaCnpj}.xls`;
+      }
+
+      if (empresaNome) {
+        return `${empresaNome}.xls`;
+      }
+
+      if (empresaCnpj) {
+        return `${empresaCnpj}.xls`;
+      }
+
+      return "extrato_conciliacao.xls";
+    }
+
     function setActiveChip(value) {
       state.filtroNatureza = value;
       filterChips.forEach((chip) => {
@@ -5425,7 +5917,7 @@
 
     // ── Normalização de histórico ──────────────────────────────────────────
     function historicNormKey(historico) {
-      return String(historico || "").trim().toLowerCase();
+      return normalizeDescricaoLancamento(historico);
     }
 
     // ── Regras — integração com API ───────────────────────────────────────
@@ -5455,6 +5947,10 @@
             empresaId: r.empresa || null,   // null = regra global
           });
         });
+        // Recalcula o mapa de regras aplicadas do zero para refletir inclusões,
+        // exclusões e alterações de texto de referência.
+        state.regras = {};
+
         // Ordena: menor prioridade = aplica primeiro
         state.regrasFlexi.sort((a, b) => a.prioridade - b.prioridade);
         applyApiRulesToLancamentos();
@@ -5479,15 +5975,131 @@
     }
 
     function matchesRule(desc, textoRef, tipoComp) {
-      const ref = textoRef.toLowerCase();
+      const ref = historicNormKey(textoRef);
+      if (!ref) return false;
       if (tipoComp === "IGUAL") return desc === ref;
       if (tipoComp === "COMECA_COM") return desc.startsWith(ref);
       return desc.includes(ref); // CONTEM (padrão)
     }
 
+    function inferTipoComponente(component) {
+      const explicit = String(component?.tipoComponente || component?.tipo_componente || "").trim().toUpperCase();
+      if (explicit) return explicit;
+
+      const descricao = getNormalizedComponentDescription(component);
+      if (!descricao || descricao === "PRINCIPAL") return "PRINCIPAL";
+      if (descricao.includes("TARIFA")) return "TARIFA";
+      if (descricao.includes("JUROS")) return "JUROS";
+      if (descricao.includes("MULTA")) return "MULTA";
+      if (descricao.includes("DESCONTO") || descricao.includes("ABATIMENTO")) return "DESCONTO";
+      return "OUTROS";
+    }
+
+    function normalizeComponente(component) {
+      const valor = parseFloat(component?.valor || 0);
+      return {
+        descricao: String(component?.descricao || "").trim(),
+        valor: Number.isFinite(valor) ? valor : 0,
+        tipoComponente: inferTipoComponente(component),
+        codDebito: String(component?.codDebito || component?.conta_debito || "").trim(),
+        codCredito: String(component?.codCredito || component?.conta_credito || "").trim(),
+        codHistorico: String(component?.codHistorico || component?.codigo_historico || "").trim(),
+      };
+    }
+
+    function componentesFromComprovante(comp) {
+      return (comp?.itens || [])
+        .map((item) => normalizeComponente({
+          descricao: item?.descricao,
+          valor: item?.valor,
+        }))
+        .filter((item) => item.valor !== 0 && !isTarifaComponent(item));
+    }
+
+    function getDefaultCodigosLancamento(l) {
+      const key = lancamentoKey(l);
+      const nk = getLancamentoDescricaoNormalizada(l);
+      const regra = state.regras[key] || state.regrasMap[nk] || {};
+      const defaults = {
+        codDebito: regra.codDebito || "",
+        codCredito: regra.codCredito || "",
+        codHistorico: regra.codHistorico || "",
+      };
+
+      if (!defaults.codDebito && !defaults.codCredito && state.contasBancarias.length) {
+        const BANCO_NORM = {
+          bb: "banco do brasil",
+          bradesco: "bradesco",
+          amazonia: "amaz",
+          santander: "santander",
+          caixa: "caixa",
+          itau: "ita",
+          sicredi: "sicredi",
+          sicoob: "sicoob",
+          inter: "inter",
+          nubank: "nubank",
+          btg: "btg",
+        };
+        const bancoKey = (state.extratoMeta?.banco || "").toLowerCase().replace(/[^a-z]/g, "");
+        const bancoNorm = BANCO_NORM[bancoKey] || bancoKey;
+        const conta = state.contasBancarias.find(
+          (c) => c.banco && c.codigo_contabil && c.banco.toLowerCase().includes(bancoNorm)
+        );
+        if (conta) {
+          if (l.natureza === "DEBITO") {
+            defaults.codCredito = conta.codigo_contabil;
+          } else if (l.natureza === "CREDITO") {
+            defaults.codDebito = conta.codigo_contabil;
+          }
+        }
+      }
+
+      return defaults;
+    }
+
+    function buildInitialComponentes(l, comp) {
+      if (l?.tipo_lancamento && l.tipo_lancamento !== "PRINCIPAL") {
+        const defaults = getDefaultCodigosLancamento(l);
+        return [normalizeComponente({
+          descricao: l.tipo_lancamento === "TARIFA_AGRUPADA" ? "Tarifa agrupada" : "Tarifa",
+          tipoComponente: "OUTROS",
+          valor: l.valor_original_do_banco ?? l.valor,
+          ...defaults,
+        })];
+      }
+
+      const defaults = getDefaultCodigosLancamento(l);
+      const comprovanteComponentes = componentesFromComprovante(comp).map((item) => normalizeComponente({
+        ...defaults,
+        ...item,
+      }));
+
+      if (comprovanteComponentes.length) {
+        const principalIndex = comprovanteComponentes.findIndex((item) => historicNormKey(item.descricao) === "PRINCIPAL");
+        const targetIndex = principalIndex >= 0 ? principalIndex : (comprovanteComponentes.length === 1 ? 0 : -1);
+        if (targetIndex >= 0) {
+          const target = comprovanteComponentes[targetIndex];
+          if (!target.codDebito && !target.codCredito && !target.codHistorico) {
+            comprovanteComponentes[targetIndex] = normalizeComponente({
+              ...target,
+              ...defaults,
+            });
+          }
+        }
+        return comprovanteComponentes;
+      }
+
+      return [normalizeComponente({
+        descricao: "Principal",
+        tipoComponente: "PRINCIPAL",
+        valor: l.valor_original_do_banco ?? l.valor,
+        ...defaults,
+      })];
+    }
+
     function applyApiRulesToLancamentos() {
       state.lancamentos.forEach((l) => {
-        const desc = historicNormKey(l.historico);
+        const desc = getLancamentoDescricaoNormalizada(l);
         const nat = (l.natureza || "").toUpperCase();
         const regra = state.regrasFlexi.find((r) => {
           // Filtro por tipo de movimento
@@ -5518,8 +6130,14 @@
     const detalheHist = panel.querySelector("[data-detalhe-hist]");
     const detalheData = panel.querySelector("[data-detalhe-data]");
     const detalheDoc = panel.querySelector("[data-detalhe-doc]");
-    const detalheValor = panel.querySelector("[data-detalhe-valor]");
+    const detalheLabelValorPrincipal = panel.querySelector("[data-detalhe-label-valor-principal]");
+    const detalheLabelValorOriginal = panel.querySelector("[data-detalhe-label-valor-original]");
+    const detalheLabelTarifa = panel.querySelector("[data-detalhe-label-tarifa]");
+    const detalheValorPrincipal = panel.querySelector("[data-detalhe-valor-principal]");
+    const detalheValorOriginal = panel.querySelector("[data-detalhe-valor-original]");
+    const detalheTarifa = panel.querySelector("[data-detalhe-tarifa]");
     const detalheNatureza = panel.querySelector("[data-detalhe-natureza]");
+    const detalheComponentesTitle = panel.querySelector("[data-detalhe-componentes-title]");
     const detalheList = panel.querySelector("[data-detalhe-list]");
     const detalheEmpty = panel.querySelector("[data-detalhe-empty]");
     const detalheDistribuido = panel.querySelector("[data-detalhe-distribuido]");
@@ -5531,11 +6149,11 @@
     const detalheRegrasForm = panel.querySelector("[data-detalhe-regras-form]");
     const detalheRegrasError = panel.querySelector("[data-detalhe-regras-error]");
     const detalheRegrasOk = panel.querySelector("[data-detalhe-regras-ok]");
-    const detalheRegraSalva = panel.querySelector("[data-detalhe-regra-salva]");
-    const detalheRegraCodDebito = panel.querySelector("[data-detalhe-regra-cod-debito]");
-    const detalheRegraCodCredito = panel.querySelector("[data-detalhe-regra-cod-credito]");
-    const detalheRegraCodHistorico = panel.querySelector("[data-detalhe-regra-cod-historico]");
     const detalheComprovante = panel.querySelector("[data-detalhe-comprovante-info]");
+    const detalheComprovanteViewer = panel.querySelector("[data-detalhe-comprovante-viewer]");
+    const detalheComprovanteFrame = panel.querySelector("[data-detalhe-comprovante-frame]");
+    const detalheComprovanteOpen = panel.querySelector("[data-detalhe-comprovante-open]");
+    const detalheComprovanteViewerClose = panel.querySelector("[data-detalhe-comprovante-viewer-close]");
     const extrairXlsBtn = panel.querySelector("[data-extrato-extrair-xls]");
 
     // ── Regras Automáticas — refs ─────────────────────────────────────────
@@ -5559,15 +6177,6 @@
         getValue: (item) => String(item.codigo),
       });
     }
-    if (detalheRegrasForm) {
-      setupCombobox(detalheRegrasForm.elements.codDebito, () => window.__GM_PLANO_CONTAS__ || []);
-      setupCombobox(detalheRegrasForm.elements.codCredito, () => window.__GM_PLANO_CONTAS__ || []);
-      setupCombobox(detalheRegrasForm.elements.codHistorico, () => window.__GM_HISTORICOS__ || [], {
-        getLabel: (item) => `${item.codigo} \u2014 ${item.nome}`,
-        getValue: (item) => String(item.codigo),
-      });
-    }
-
     // ── Regras Automáticas — render e CRUD ───────────────────────────────
     const COMP_LABELS = { CONTEM: "Contém", IGUAL: "Igual", COMECA_COM: "Começa com" };
     const MOV_LABELS = { AMBOS: "Ambos", CREDITO: "Só crédito", DEBITO: "Só débito" };
@@ -5737,6 +6346,16 @@
           regrasAutoForm.hidden = true;
           regrasAutoForm.reset();
           await loadRegrasFromAPI();
+
+          if (state.importacao?.id) {
+            const payload = await apiRequest(session, `/conciliador-importacoes/${state.importacao.id}/transacoes/`);
+            state.lancamentos = normalizeLancamentos(payload);
+            recomputeComprovanteMatches();
+            recomputeTarifaMatches();
+            applyApiRulesToLancamentos();
+            updateCounts();
+            renderTable();
+          }
         } catch (err) {
           if (regrasAutoFormError) { regrasAutoFormError.textContent = err.message || "Falha ao salvar."; regrasAutoFormError.hidden = false; }
         } finally {
@@ -5745,16 +6364,141 @@
       });
     }
 
-    function renderRegraSalva(r) {
-      if (!detalheRegraSalva) return;
-      const temRegra = r && (r.codDebito || r.codCredito || r.codHistorico);
-      if (temRegra) {
-        if (detalheRegraCodDebito) detalheRegraCodDebito.textContent = r.codDebito || "—";
-        if (detalheRegraCodCredito) detalheRegraCodCredito.textContent = r.codCredito || "—";
-        if (detalheRegraCodHistorico) detalheRegraCodHistorico.textContent = r.codHistorico || "—";
-        detalheRegraSalva.hidden = false;
-      } else {
-        detalheRegraSalva.hidden = true;
+    function resetDetalheSaveFeedback() {
+      if (detalheRegrasError) {
+        detalheRegrasError.textContent = "";
+        detalheRegrasError.hidden = true;
+      }
+      if (detalheRegrasOk) {
+        detalheRegrasOk.hidden = true;
+        detalheRegrasOk.style.display = "none";
+      }
+    }
+
+    function hideDetalheComprovanteViewer() {
+      if (typeof detalheComprovanteViewer?.close === "function" && detalheComprovanteViewer.open) {
+        detalheComprovanteViewer.close();
+      }
+      if (detalheComprovanteFrame) detalheComprovanteFrame.removeAttribute("src");
+      if (detalheComprovanteOpen) detalheComprovanteOpen.setAttribute("href", "#");
+      if (detalheComprovanteViewer) delete detalheComprovanteViewer.dataset.previewKey;
+    }
+
+    function getComprovantePreviewUrl(comp) {
+      const baseUrl = comp?._arquivoUrl || "";
+      if (!baseUrl) return "";
+
+      const page = Number(comp?.pagina || 0);
+      if (page > 0) {
+        return `${baseUrl}#page=${page}&view=FitH`;
+      }
+
+      return baseUrl;
+    }
+
+    function getComprovantePreviewKey(comp) {
+      return `${comp?._arquivoUrl || ""}::${comp?.pagina || ""}`;
+    }
+
+    function showDetalheComprovanteViewer(comp) {
+      const previewUrl = getComprovantePreviewUrl(comp);
+      if (!previewUrl || !detalheComprovanteViewer || !detalheComprovanteFrame || !detalheComprovanteOpen) return;
+      detalheComprovanteOpen.href = previewUrl;
+      detalheComprovanteFrame.src = previewUrl;
+      detalheComprovanteViewer.dataset.previewKey = getComprovantePreviewKey(comp);
+      if (!detalheComprovanteViewer.open && typeof detalheComprovanteViewer.showModal === "function") {
+        try {
+          detalheComprovanteViewer.showModal();
+          return;
+        } catch (_) {
+          // fallback abaixo
+        }
+      }
+      detalheComprovanteViewer.setAttribute("open", "open");
+    }
+
+    function getLinkedTarifaLaunch(lancamento) {
+      if (!lancamento?.lancamento_relacionado_key) return null;
+      return state.lancamentos.find((item) => lancamentoKey(item) === lancamento.lancamento_relacionado_key) || null;
+    }
+
+    function isLockedComposicaoMode(lancamento, comprovante) {
+      return Boolean(comprovante && (hasExpectedTarifa(comprovante) || shouldUseComprovanteComposition(comprovante) || lancamento?.tipo_lancamento !== "PRINCIPAL"));
+    }
+
+    function syncDetalheSummaryLabels(lancamento, comprovante, valores) {
+      const hasComposition = shouldUseComprovanteComposition(comprovante);
+      if (detalheLabelValorPrincipal) detalheLabelValorPrincipal.textContent = "Valor principal";
+      if (detalheLabelValorOriginal) detalheLabelValorOriginal.textContent = hasComposition ? "Total pago" : "Valor original";
+      if (detalheLabelTarifa) detalheLabelTarifa.textContent = hasExpectedTarifa(comprovante) ? "Tarifa esperada" : "Tarifa";
+      if (detalheComponentesTitle) {
+        if (hasComposition) detalheComponentesTitle.textContent = "Composição do pagamento";
+        else if (hasExpectedTarifa(comprovante)) detalheComponentesTitle.textContent = "Principal";
+        else detalheComponentesTitle.textContent = "Componentes";
+      }
+      if (detalheValorPrincipal) detalheValorPrincipal.textContent = formatCurrency(valores.valorPrincipal);
+      if (detalheValorOriginal) detalheValorOriginal.textContent = formatCurrency(hasComposition ? valores.totalPago : valores.valorOriginalBanco);
+      if (detalheTarifa) detalheTarifa.textContent = hasExpectedTarifa(comprovante) ? formatCurrency(valores.tarifa) : "—";
+    }
+
+    function renderDetalheComprovanteInfo(lancamento, comprovante) {
+      if (!detalheComprovante) return;
+
+      const hasRelevantInfo = Boolean(comprovante && (hasExpectedTarifa(comprovante) || shouldUseComprovanteComposition(comprovante)));
+      if (!hasRelevantInfo) {
+        detalheComprovante.hidden = true;
+        detalheComprovante.innerHTML = "";
+        hideDetalheComprovanteViewer();
+        return;
+      }
+
+      const tipoLabel = {
+        bb_boleto: "BB — Boleto",
+        bb_pix: "BB — PIX",
+        bb_ted: "BB — TED / Transferência",
+        bb_convenio: "BB — Pagamento Convênio",
+        bradesco_boleto: "Bradesco — Boleto",
+        darf: "Receita Federal — DARF",
+      }[comprovante.tipo] || comprovante.tipo;
+      const dataPag = comprovante.data_pagamento ? formatDateBR(comprovante.data_pagamento) : "—";
+      const benef = comprovante.beneficiario ? ` · ${escapeHtml(comprovante.beneficiario)}` : "";
+      const pageLabel = comprovante.pagina ? ` · Página ${escapeHtml(String(comprovante.pagina))}` : "";
+      const actions = [];
+
+      if (comprovante._arquivoUrl) {
+        actions.push('<button type="button" class="detalhe-comp-action" data-detalhe-comprovante-toggle>Abrir prévia</button>');
+      }
+
+      const linkedTarifa = getLinkedTarifaLaunch(lancamento);
+      if (hasExpectedTarifa(comprovante) && linkedTarifa) {
+        actions.push('<button type="button" class="detalhe-comp-action" data-detalhe-tarifa-launch>Ver lançamento da tarifa</button>');
+      }
+
+      let extraInfo = "";
+      if (hasExpectedTarifa(comprovante)) {
+        const statusMeta = getTarifaStatusMeta(lancamento.status_vinculo_tarifa);
+        extraInfo = `<span class="detalhe-comp-status detalhe-comp-status--${escapeHtml(statusMeta.tone)}">${escapeHtml(statusMeta.icon)} ${escapeHtml(statusMeta.label)}</span><span>Tarifa: ${escapeHtml(formatCurrency(comprovante.tarifa_valor))}</span>`;
+      } else if (shouldUseComprovanteComposition(comprovante)) {
+        const labels = getComprovanteDisplayBadges(comprovante).join(" · ");
+        extraInfo = `<span class="detalhe-comp-status detalhe-comp-status--info">Composição</span><span>${escapeHtml(labels || "Principal")}</span>`;
+      }
+
+      detalheComprovante.innerHTML =
+        `<span class="detalhe-comp-tag">Comprovante</span>` +
+        `<span>${escapeHtml(tipoLabel)}${benef}</span>` +
+        `<span>Pagamento: ${escapeHtml(dataPag)}${pageLabel}</span>` +
+        extraInfo +
+        actions.join("");
+      detalheComprovante.hidden = false;
+
+      const previewBtn = detalheComprovante.querySelector("[data-detalhe-comprovante-toggle]");
+      if (previewBtn && comprovante._arquivoUrl) {
+        previewBtn.addEventListener("click", () => showDetalheComprovanteViewer(comprovante));
+      }
+
+      const tarifaBtn = detalheComprovante.querySelector("[data-detalhe-tarifa-launch]");
+      if (tarifaBtn && linkedTarifa) {
+        tarifaBtn.addEventListener("click", () => openDetalhe(linkedTarifa));
       }
     }
 
@@ -5762,93 +6506,31 @@
       if (!detalheDialog) return;
       const key = lancamentoKey(l);
       state.detalheKey = key;
+      hideDetalheComprovanteViewer();
 
       if (detalheHist) detalheHist.value = l.historico || "";
       if (detalheData) detalheData.textContent = formatDateBR(l.data) || "—";
       if (detalheDoc) detalheDoc.textContent = l.documento || "—";
-      if (detalheValor) detalheValor.textContent = formatCurrency(l.valor);
       if (detalheNatureza) detalheNatureza.innerHTML = naturezaBadge(l.natureza);
       if (detalheAddForm) detalheAddForm.reset();
       if (detalheAddError) { detalheAddError.textContent = ""; detalheAddError.hidden = true; }
 
       // ── Comprovante vinculado ──────────────────────────────────────────
-      const docKey = normalizeDoc(l.documento);
-      const comp = docKey ? state.comprovantes[docKey] : null;
+      const comp = getMatchedComprovante(l);
+      renderDetalheComprovanteInfo(l, comp);
 
-      // Mostra bloco de info do comprovante
-      if (detalheComprovante) {
-        if (comp) {
-          const tipoLabel = {
-            bb_boleto: "BB — Boleto",
-            bb_pix: "BB — PIX",
-            bb_ted: "BB — TED / Transferência",
-            bb_convenio: "BB — Pagamento Convênio",
-            bradesco_boleto: "Bradesco — Boleto",
-            darf: "Receita Federal — DARF",
-          }[comp.tipo] || comp.tipo;
-          const dataPag = comp.data_pagamento ? formatDateBR(comp.data_pagamento) : "—";
-          const benef = comp.beneficiario ? ` · ${escapeHtml(comp.beneficiario)}` : "";
-          detalheComprovante.innerHTML =
-            `<span class="detalhe-comp-tag">📎 Comprovante</span>` +
-            `<span>${escapeHtml(tipoLabel)}${benef}</span>` +
-            `<span>Pagamento: ${escapeHtml(dataPag)}</span>`;
-          detalheComprovante.hidden = false;
-        } else {
-          detalheComprovante.hidden = true;
-          detalheComprovante.innerHTML = "";
-        }
+      if (!state.componentes[key]) {
+        state.componentes[key] = buildInitialComponentes(l, comp);
       }
 
-      // Auto-popula componentes do comprovante se ainda não foram adicionados (só quando há itens além do Principal)
-      if (comp && comp.itens && comp.itens.length > 1 && !state.componentes[key]) {
-        state.componentes[key] = comp.itens
-          .filter((it) => parseFloat(it.valor || 0) !== 0)
-          .map((it) => ({ descricao: it.descricao, valor: parseFloat(it.valor || 0) }));
+      const valores = getLancamentoValores(l, state.componentes[key]);
+      syncDetalheSummaryLabels(l, comp, valores);
+
+      if (detalheAddForm) {
+        detalheAddForm.hidden = isLockedComposicaoMode(l, comp);
       }
 
-      if (detalheRegrasForm) {
-        const nk = historicNormKey(l.historico);
-        const r = state.regras[key] || state.regrasMap[nk] || {};
-        detalheRegrasForm.elements.codDebito.value = r.codDebito || "";
-        detalheRegrasForm.elements.codCredito.value = r.codCredito || "";
-        detalheRegrasForm.elements.codHistorico.value = r.codHistorico || "";
-
-        // Pré-preenchimento automático: quando não há regra, usa o código contábil
-        // da conta bancária da empresa que corresponde ao banco do extrato.
-        // Inversão contábil: DÉBITO no extrato → lançamento CRÉDITO contábil (e vice-versa)
-        if (!r.codDebito && !r.codCredito && state.contasBancarias.length) {
-          // Mapa: valor do select de banco no conciliador → substring do nome da conta bancária
-          const BANCO_NORM = {
-            bb: "banco do brasil",
-            bradesco: "bradesco",
-            amazonia: "amaz",
-            santander: "santander",
-            caixa: "caixa",
-            itau: "ita",
-            sicredi: "sicredi",
-            sicoob: "sicoob",
-            inter: "inter",
-            nubank: "nubank",
-            btg: "btg",
-          };
-          const bancoKey = (state.extratoMeta?.banco || "").toLowerCase().replace(/[^a-z]/g, "");
-          const bancoNorm = BANCO_NORM[bancoKey] || bancoKey;
-          const conta = state.contasBancarias.find(
-            (c) => c.banco && c.codigo_contabil && c.banco.toLowerCase().includes(bancoNorm)
-          );
-          if (conta) {
-            if (l.natureza === "DEBITO") {
-              detalheRegrasForm.elements.codCredito.value = conta.codigo_contabil;
-            } else if (l.natureza === "CREDITO") {
-              detalheRegrasForm.elements.codDebito.value = conta.codigo_contabil;
-            }
-          }
-        }
-
-        renderRegraSalva(r);
-      }
-      if (detalheRegrasError) { detalheRegrasError.textContent = ""; detalheRegrasError.hidden = true; }
-      if (detalheRegrasOk) { detalheRegrasOk.hidden = true; detalheRegrasOk.style.display = "none"; }
+      resetDetalheSaveFeedback();
 
       renderDetalheList();
 
@@ -5861,11 +6543,29 @@
 
     function closeDetalhe() {
       state.detalheKey = null;
+      hideDetalheComprovanteViewer();
       if (typeof detalheDialog?.close === "function" && detalheDialog.open) {
         detalheDialog.close();
       } else if (detalheDialog) {
         detalheDialog.removeAttribute("open");
       }
+    }
+
+    function syncDetalheListScrollState() {
+      if (!detalheList) return;
+
+      detalheList.classList.remove("is-scrollable");
+      detalheList.style.removeProperty("--detalhe-comp-list-max-height");
+
+      const items = Array.from(detalheList.querySelectorAll(".detalhe-comp-item"));
+      if (items.length <= 2) return;
+
+      const styles = window.getComputedStyle(detalheList);
+      const gap = parseFloat(styles.rowGap || styles.gap || "0") || 0;
+      const maxHeight = items.slice(0, 2).reduce((total, item) => total + item.getBoundingClientRect().height, 0) + gap;
+
+      detalheList.style.setProperty("--detalhe-comp-list-max-height", `${Math.ceil(maxHeight)}px`);
+      detalheList.classList.add("is-scrollable");
     }
 
     function renderDetalheList() {
@@ -5874,11 +6574,24 @@
       const l = state.lancamentos.find((x) => lancamentoKey(x) === key);
       if (!l) return;
 
-      const valorOriginal = parseFloat(l.valor || 0);
-      const comps = state.componentes[key] || [];
-      const totalDist = comps.reduce((s, c) => s + c.valor, 0);
+      const comprovante = getMatchedComprovante(l);
+      const lockedMode = isLockedComposicaoMode(l, comprovante);
+
+      const valorOriginal = parseFloat((l.valor_original_do_banco ?? l.valor ?? 0));
+      const comps = (state.componentes[key] || []).map(normalizeComponente);
+      if (state.componentes[key]) {
+        state.componentes[key] = comps;
+      }
+      const valores = getLancamentoValores(l, comps);
+      const totalDist = comps.reduce((s, c) => s + parseFloat(c.valor || 0), 0);
       const restante = valorOriginal - totalDist;
       const pct = valorOriginal > 0 ? Math.min(100, (totalDist / valorOriginal) * 100) : 0;
+
+      syncDetalheSummaryLabels(l, comprovante, valores);
+
+      if (detalheAddForm) {
+        detalheAddForm.hidden = lockedMode;
+      }
 
       if (detalheDistribuido) detalheDistribuido.textContent = formatCurrency(totalDist);
       if (detalheRestante) {
@@ -5889,31 +6602,83 @@
 
       if (!comps.length) {
         detalheList.innerHTML = '<li class="detalhe-componentes-empty" data-detalhe-empty>Nenhum componente adicionado ainda.</li>';
+        syncDetalheListScrollState();
         return;
       }
 
       detalheList.innerHTML = comps.map((c, i) => `
         <li class="detalhe-comp-item">
-          <span class="detalhe-comp-desc">${escapeHtml(c.descricao)}</span>
-          <span class="detalhe-comp-valor">${escapeHtml(formatCurrency(c.valor))}</span>
-          <button type="button" class="detalhe-comp-remove" data-comp-idx="${i}" title="Remover" aria-label="Remover ${escapeHtml(c.descricao)}">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M18 6L6 18M6 6l12 12"/>
-            </svg>
-          </button>
+          <div class="detalhe-comp-head">
+            <div class="detalhe-comp-summary">
+              <span class="detalhe-comp-desc">${escapeHtml(c.descricao)}</span>
+              <span class="detalhe-comp-valor">${escapeHtml(formatCurrency(c.tipoComponente === "DESCONTO" ? Math.abs(c.valor) : c.valor))}</span>
+            </div>
+            ${lockedMode ? "" : `<button type="button" class="detalhe-comp-remove" data-comp-idx="${i}" title="Remover" aria-label="Remover ${escapeHtml(c.descricao)}">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M18 6L6 18M6 6l12 12"/>
+              </svg>
+            </button>`}
+          </div>
+          <div class="detalhe-comp-grid">
+            <label class="detalhe-comp-field">
+              <span>Cód. Débito</span>
+              <input type="text" value="${escapeHtml(c.codDebito)}" placeholder="Ex: 1.1.01" data-comp-idx="${i}" data-comp-field="codDebito" autocomplete="off" />
+            </label>
+            <label class="detalhe-comp-field">
+              <span>Cód. Crédito</span>
+              <input type="text" value="${escapeHtml(c.codCredito)}" placeholder="Ex: 2.1.01" data-comp-idx="${i}" data-comp-field="codCredito" autocomplete="off" />
+            </label>
+            <label class="detalhe-comp-field">
+              <span>Cód. Histórico</span>
+              <input type="text" value="${escapeHtml(c.codHistorico)}" placeholder="Ex: H001" data-comp-idx="${i}" data-comp-field="codHistorico" autocomplete="off" />
+            </label>
+          </div>
         </li>
       `).join("");
 
+      syncDetalheListScrollState();
+
       detalheList.querySelectorAll("[data-comp-idx]").forEach((btn) => {
+        if (btn.matches("[data-comp-field]")) return;
         btn.addEventListener("click", () => {
           const idx = parseInt(btn.dataset.compIdx, 10);
           state.componentes[key].splice(idx, 1);
           if (!state.componentes[key].length) delete state.componentes[key];
+          resetDetalheSaveFeedback();
           renderDetalheList();
           renderTable();
         });
       });
+
+      detalheList.querySelectorAll("[data-comp-field]").forEach((input) => {
+        const idx = parseInt(input.dataset.compIdx, 10);
+        const field = input.dataset.compField;
+        input.addEventListener("input", () => {
+          if (!state.componentes[key]?.[idx]) return;
+          state.componentes[key][idx][field] = input.value;
+          resetDetalheSaveFeedback();
+        });
+      });
+
+      detalheList.querySelectorAll('[data-comp-field="codDebito"]').forEach((input) => {
+        setupCombobox(input, () => window.__GM_PLANO_CONTAS__ || []);
+      });
+      detalheList.querySelectorAll('[data-comp-field="codCredito"]').forEach((input) => {
+        setupCombobox(input, () => window.__GM_PLANO_CONTAS__ || []);
+      });
+      detalheList.querySelectorAll('[data-comp-field="codHistorico"]').forEach((input) => {
+        setupCombobox(input, () => window.__GM_HISTORICOS__ || [], {
+          getLabel: (item) => `${item.codigo} \u2014 ${item.nome}`,
+          getValue: (item) => String(item.codigo),
+        });
+      });
     }
+
+    window.addEventListener("resize", () => {
+      if (state.detalheKey) {
+        syncDetalheListScrollState();
+      }
+    });
 
     if (detalheClose) {
       detalheClose.addEventListener("click", closeDetalhe);
@@ -5922,6 +6687,16 @@
     if (detalheDialog) {
       detalheDialog.addEventListener("click", (e) => {
         if (e.target === detalheDialog) closeDetalhe();
+      });
+    }
+
+    if (detalheComprovanteViewerClose) {
+      detalheComprovanteViewerClose.addEventListener("click", hideDetalheComprovanteViewer);
+    }
+
+    if (detalheComprovanteViewer) {
+      detalheComprovanteViewer.addEventListener("click", (e) => {
+        if (e.target === detalheComprovanteViewer) hideDetalheComprovanteViewer();
       });
     }
 
@@ -5942,22 +6717,10 @@
         }
 
         const key = state.detalheKey;
-        const l = state.lancamentos.find((x) => lancamentoKey(x) === key);
-        const valorOriginal = parseFloat(l?.valor || 0);
-        const compsAtuais = state.componentes[key] || [];
-        const totalDist = compsAtuais.reduce((s, c) => s + c.valor, 0);
-
-        if (totalDist + valor > valorOriginal + 0.005) {
-          if (detalheAddError) {
-            detalheAddError.textContent = `Valor excede o restante (${formatCurrency(Math.max(0, valorOriginal - totalDist))}).`;
-            detalheAddError.hidden = false;
-          }
-          return;
-        }
-
         if (detalheAddError) detalheAddError.hidden = true;
         if (!state.componentes[key]) state.componentes[key] = [];
-        state.componentes[key].push({ descricao: desc, valor });
+        state.componentes[key].push(normalizeComponente({ descricao: desc, valor }));
+        resetDetalheSaveFeedback();
         detalheAddForm.reset();
         detalheAddForm.elements.descricao?.focus();
         renderDetalheList();
@@ -5966,132 +6729,65 @@
     }
 
     if (detalheRegrasForm) {
-      detalheRegrasForm.addEventListener("submit", async (e) => {
+      detalheRegrasForm.addEventListener("submit", (e) => {
         e.preventDefault();
         const key = state.detalheKey;
         if (!key) return;
-        const codDebito = String(detalheRegrasForm.elements.codDebito?.value || "").trim();
-        const codCredito = String(detalheRegrasForm.elements.codCredito?.value || "").trim();
-        const codHistorico = String(detalheRegrasForm.elements.codHistorico?.value || "").trim();
-        if (!codDebito && !codCredito && !codHistorico) {
-          if (detalheRegrasError) { detalheRegrasError.textContent = "Preencha ao menos um código."; detalheRegrasError.hidden = false; }
-          return;
-        }
-        if (detalheRegrasError) { detalheRegrasError.textContent = ""; detalheRegrasError.hidden = true; }
+        const lancamento = state.lancamentos.find((item) => lancamentoKey(item) === key);
+        if (!lancamento) return;
 
-        const l = state.lancamentos.find((x) => lancamentoKey(x) === key);
-        if (!l) return;
+        const comps = (state.componentes[key] || [])
+          .map(normalizeComponente)
+          .filter((component) => component.descricao && component.valor !== 0);
 
-        const saveBtn = detalheRegrasForm.querySelector(".detalhe-regras-save-btn");
-        if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = "Salvando..."; }
-
-        try {
-          // Garante escritorioId carregado
-          if (!state.escritorioId) {
-            const escsData = await apiRequest(session, "/escritorios/");
-            const escs = Array.isArray(escsData) ? escsData : (escsData?.results || []);
-            if (escs.length > 0) state.escritorioId = escs[0].id;
-          }
-          if (!state.escritorioId) {
-            throw new Error("Escritório não encontrado. Recarregue a página.");
-          }
-
-          const nk = historicNormKey(l.historico);
-          const existing = state.regrasMap[nk];
-          const nomeEditado = String(detalheHist?.value || l.historico || "").trim().slice(0, 255) || l.historico.slice(0, 255);
-          let savedRule;
-
-          if (existing?.id) {
-            // Atualiza regra existente
-            savedRule = await apiRequest(session, `/conciliador-regras/${existing.id}/`, {
-              method: "PATCH",
-              body: {
-                nome: nomeEditado,
-                conta_debito: codDebito,
-                conta_credito: codCredito,
-                codigo_historico: codHistorico,
-              },
-            });
-          } else {
-            // Cria nova regra
-            savedRule = await apiRequest(session, "/conciliador-regras/", {
-              method: "POST",
-              body: {
-                escritorio: state.escritorioId,
-                empresa: state.empresaId || undefined,
-                nome: nomeEditado,
-                texto_referencia: l.historico.slice(0, 255),
-                tipo_comparacao: "CONTEM",
-                conta_debito: codDebito,
-                conta_credito: codCredito,
-                codigo_historico: codHistorico,
-              },
-            });
-          }
-
-          // Atualiza estado local e aplica a todos lançamentos com mesmo histórico
-          const ruleData = { id: savedRule.id, codDebito, codCredito, codHistorico };
-          state.regrasMap[nk] = ruleData;
-          state.lancamentos.forEach((lc) => {
-            if (historicNormKey(lc.historico) === nk) {
-              state.regras[lancamentoKey(lc)] = { ...ruleData };
-            }
-          });
-
-          // Atualiza regrasFlexi com o nome editado para que regraCell e renderRegrasAutoList reflitam imediatamente
-          const flexiIdx = state.regrasFlexi.findIndex((x) => x.id === savedRule.id);
-          if (flexiIdx >= 0) {
-            state.regrasFlexi[flexiIdx] = {
-              ...state.regrasFlexi[flexiIdx],
-              nome: nomeEditado,
-              codDebito,
-              codCredito,
-              codHistorico,
-            };
-          } else {
-            state.regrasFlexi.push({
-              id: savedRule.id,
-              textoRef: l.historico.slice(0, 255),
-              tipoComp: savedRule.tipo_comparacao || "CONTEM",
-              tipoMov: savedRule.tipo_movimento || "AMBOS",
-              prioridade: savedRule.prioridade ?? 100,
-              nome: nomeEditado,
-              codDebito,
-              codCredito,
-              codHistorico,
-            });
-            state.regrasFlexi.sort((a, b) => a.prioridade - b.prioridade);
-          }
-
-          updateCounts();
-          renderRegrasAutoList();
-          renderTable();
-          renderRegraSalva(ruleData);
-
-          if (detalheRegrasOk) {
-            detalheRegrasOk.hidden = false;
-            detalheRegrasOk.style.display = "flex";
-            setTimeout(() => {
-              if (detalheRegrasOk) {
-                detalheRegrasOk.hidden = true;
-                detalheRegrasOk.style.display = "none";
-              }
-            }, 3000);
-          }
-        } catch (err) {
+        if (!comps.length) {
           if (detalheRegrasError) {
-            detalheRegrasError.textContent = err.message || "Falha ao salvar a regra.";
+            detalheRegrasError.textContent = "Adicione ao menos um componente antes de salvar.";
             detalheRegrasError.hidden = false;
           }
-        } finally {
-          if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = "Salvar regra"; }
+          return;
+        }
+
+        const descricaoEditada = String(detalheHist?.value || lancamento.historico || "").trim() || lancamento.historico;
+        lancamento.historico = descricaoEditada;
+        lancamento.descricao_original = descricaoEditada;
+        lancamento.descricao_normalizada = normalizeDescricaoLancamento(descricaoEditada);
+        Object.assign(lancamento, classifyLancamentoTipo(lancamento));
+
+        state.componentes[key] = comps;
+        recomputeComprovanteMatches();
+        recomputeTarifaMatches();
+        state.regras = {};
+        applyApiRulesToLancamentos();
+        if (detalheRegrasError) {
+          detalheRegrasError.textContent = "";
+          detalheRegrasError.hidden = true;
+        }
+        renderDetalheList();
+        updateCounts();
+        renderTable();
+
+        if (detalheRegrasOk) {
+          detalheRegrasOk.hidden = false;
+          detalheRegrasOk.style.display = "flex";
+          setTimeout(() => {
+            if (detalheRegrasOk) {
+              detalheRegrasOk.hidden = true;
+              detalheRegrasOk.style.display = "none";
+            }
+          }, 3000);
         }
       });
     }
 
     // Normaliza número de documento para matching com comprovantes (remove zeros à esquerda)
     function normalizeDoc(doc) {
-      return String(doc || "").replace(/\./g, "").replace(/,/g, "").trim().replace(/^0+/, "") || "";
+      const normalized = String(doc || "")
+        .toUpperCase()
+        .replace(/[^0-9A-Z]/g, "")
+        .trim();
+      const withoutLeadingZeros = normalized.replace(/^0+/, "");
+      return withoutLeadingZeros || normalized;
     }
 
     if (extrairXlsBtn) {
@@ -6100,60 +6796,60 @@
           alert("Biblioteca XLSX não carregada. Verifique sua conexão com a internet.");
           return;
         }
-        const rows = [["Data", "Conta Crédito", "Conta Débito", "Cód. Histórico", "Descrição", "Valor"]];
+        const rows = [["TIPO", "DESCRIÇÃO", "VALOR", "CÓD. DÉBITO", "CÓD. CRÉDITO", "CÓD. HISTÓRICO"]];
         state.lancamentos.forEach((l) => {
           const key = lancamentoKey(l);
           const r = state.regras[key] || {};
-          const docKey = normalizeDoc(l.documento);
-          const comp = docKey ? state.comprovantes[docKey] : null;
+          const comps = getResolvedComponentes(l);
 
-          // Se há comprovante com múltiplos itens, expande em sub-linhas
-          if (comp && comp.itens && comp.itens.length > 1) {
-            // Linha principal com valor_total do comprovante
+          if (l.tipo_lancamento === "TARIFA" || l.tipo_lancamento === "TARIFA_AGRUPADA") {
+            const tarifaCodes = comps[0] || {};
             rows.push([
-              l.data || "",
-              r.codCredito || "",
-              r.codDebito || "",
-              r.codHistorico || "",
-              l.historico || "",
-              parseFloat(comp.valor_total || l.valor || 0),
+              l.tipo_lancamento,
+              getLancamentoDescricaoNormalizada(l),
+              parseFloat((l.valor_original_do_banco ?? l.valor ?? 0)),
+              tarifaCodes.codDebito || r.codDebito || "",
+              tarifaCodes.codCredito || r.codCredito || "",
+              tarifaCodes.codHistorico || r.codHistorico || "",
             ]);
-            // Sub-linhas (apenas itens com valor != 0, excluindo "Principal" se quiser detalhar)
-            comp.itens.forEach((item) => {
-              const v = parseFloat(item.valor || 0);
-              if (v !== 0) {
-                rows.push([
-                  "",
-                  "",
-                  "",
-                  "",
-                  `  ${item.descricao}`,
-                  v,
-                ]);
-              }
+            return;
+          }
+
+          if (comps.length) {
+            comps.forEach((item) => {
+              const tipo = getComponentExportType(item);
+              const descricao = tipo === "PRINCIPAL"
+                ? getLancamentoDescricaoNormalizada(l)
+                : (getNormalizedComponentDescription(item) || getLancamentoDescricaoNormalizada(l));
+              rows.push([
+                tipo,
+                descricao,
+                parseFloat(item.valor || 0),
+                item.codDebito || r.codDebito || "",
+                item.codCredito || r.codCredito || "",
+                item.codHistorico || r.codHistorico || "",
+              ]);
             });
           } else {
-            // Sem comprovante ou apenas 1 item: linha simples
             rows.push([
-              l.data || "",
-              r.codCredito || "",
+              "PRINCIPAL",
+              getLancamentoDescricaoNormalizada(l),
+              parseFloat((l.valor_original_do_banco ?? l.valor ?? 0)),
               r.codDebito || "",
+              r.codCredito || "",
               r.codHistorico || "",
-              l.historico || "",
-              parseFloat(l.valor || 0),
             ]);
           }
         });
         const ws = window.XLSX.utils.aoa_to_sheet(rows);
-        // Formata coluna Valor como número
         const range = window.XLSX.utils.decode_range(ws["!ref"]);
         for (let R = 1; R <= range.e.r; R++) {
-          const cell = ws[window.XLSX.utils.encode_cell({ r: R, c: 5 })];
+          const cell = ws[window.XLSX.utils.encode_cell({ r: R, c: 2 })];
           if (cell) cell.z = "#,##0.00";
         }
         const wb = window.XLSX.utils.book_new();
         window.XLSX.utils.book_append_sheet(wb, ws, "Extrato");
-        window.XLSX.writeFile(wb, "extrato_conciliacao.xlsx");
+        window.XLSX.writeFile(wb, buildExtratoExportFilename(), { bookType: "xls" });
       });
     }
 
@@ -6305,7 +7001,12 @@
           }
         }
 
-        state.lancamentos = payload.lancamentos || [];
+        state.lancamentos = normalizeLancamentos(payload.lancamentos);
+        state.componentes = {};
+        state.detalheKey = null;
+        releaseComprovanteFileUrls();
+        state.comprovantes = [];
+        state.comprovanteMatches = {};
 
         // Filtra apenas lançamentos do mês do extrato: do dia 2 ao último dia do mês
         // Usa periodo_inicio do payload para determinar o mês de referência
@@ -6387,6 +7088,8 @@
           }
         }
 
+        recomputeComprovanteMatches();
+        recomputeTarifaMatches();
         updateCounts();
         setActiveChip("TODOS");
 

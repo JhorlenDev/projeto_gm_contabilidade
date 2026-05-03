@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from decimal import Decimal
 
 from django.db.models import Q
 from rest_framework import filters, status, viewsets
@@ -16,7 +17,9 @@ from permissions.permissions import HasUserGMRole
 from services.conciliador import (
     apply_rules_to_importacao,
     detect_tipo_arquivo,
+    describe_transaction_metadata,
     inspect_importacao_file,
+    normalize_text,
     process_importacao,
 )
 from services.keycloak import KeycloakConfigurationError, KeycloakTokenError, exchange_code_for_token
@@ -32,10 +35,13 @@ from .models import (
     ExtratoHistorico,
     HistoricoContabil,
     ImportacaoExtrato,
+    OrigemAuditoriaTarifa,
     PerfilConciliacao,
     PlanoContas,
     RegraConciliador,
     StatusImportacao,
+    TarifaVinculoAuditoria,
+    TipoComponenteLancamento,
     TransacaoImportada,
 )
 from .serializers import (
@@ -272,6 +278,36 @@ class RegraConciliadorViewSet(viewsets.ModelViewSet):
 
         return queryset
 
+    def _aplicar_regras_apos_salvar(self, regra):
+        importacao_id = self.request.query_params.get("importacao")
+        empresa = self.request.query_params.get("empresa")
+
+        if importacao_id:
+            importacoes = ImportacaoExtrato.objects.filter(id=importacao_id, escritorio=regra.escritorio)
+        elif empresa:
+            importacoes = ImportacaoExtrato.objects.filter(empresa_id=empresa, escritorio=regra.escritorio, status=StatusImportacao.PROCESSADA)
+        else:
+            importacoes = ImportacaoExtrato.objects.filter(escritorio=regra.escritorio, status=StatusImportacao.PROCESSADA)
+            if regra.empresa:
+                importacoes = importacoes.filter(empresa=regra.empresa)
+
+        for imp in importacoes:
+            apply_rules_to_importacao(imp)
+
+    def create(self, request, *args, **kwargs):
+        response = super().create(request, *args, **kwargs)
+        if response.status_code == 201:
+            regra = RegraConciliador.objects.get(pk=response.data["id"])
+            self._aplicar_regras_apos_salvar(regra)
+        return response
+
+    def update(self, request, *args, **kwargs):
+        response = super().update(request, *args, **kwargs)
+        if response.status_code == 200:
+            regra = self.get_object()
+            self._aplicar_regras_apos_salvar(regra)
+        return response
+
 
 class ImportacaoExtratoViewSet(viewsets.ModelViewSet):
     authentication_classes = [KeycloakJWTAuthentication]
@@ -360,14 +396,14 @@ class ImportacaoExtratoViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["get"])
     def transacoes(self, request, id=None):
         importacao = self.get_object()
-        queryset = importacao.transacoes.select_related("regra_aplicada").all()
+        queryset = importacao.transacoes.select_related("regra_aplicada", "lancamento_relacionado").prefetch_related("componentes").all()
         serializer = TransacaoImportadaSerializer(queryset, many=True, context=self.get_serializer_context())
         return Response(serializer.data)
 
     @action(detail=True, methods=["get"])
     def resultado(self, request, id=None):
         importacao = self.get_object()
-        queryset = importacao.transacoes.select_related("regra_aplicada").all()
+        queryset = importacao.transacoes.select_related("regra_aplicada", "lancamento_relacionado").prefetch_related("componentes").all()
         serializer = TransacaoImportadaSerializer(queryset, many=True, context=self.get_serializer_context())
         return Response({
             "importacao": self.get_serializer(importacao).data,
@@ -379,7 +415,13 @@ class TransacaoImportadaViewSet(viewsets.ModelViewSet):
     authentication_classes = [KeycloakJWTAuthentication]
     permission_classes = [HasUserGMRole]
     serializer_class = TransacaoImportadaSerializer
-    queryset = TransacaoImportada.objects.select_related("importacao", "regra_aplicada", "importacao__escritorio", "importacao__empresa")
+    queryset = TransacaoImportada.objects.select_related(
+        "importacao",
+        "regra_aplicada",
+        "lancamento_relacionado",
+        "importacao__escritorio",
+        "importacao__empresa",
+    ).prefetch_related("componentes")
     lookup_field = "id"
     lookup_value_regex = r"[0-9a-fA-F-]{36}"
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
@@ -406,7 +448,211 @@ class TransacaoImportadaViewSet(viewsets.ModelViewSet):
         return queryset
 
     def perform_update(self, serializer):
-        serializer.save(revisado_manual=True)
+        instance = self.get_object()
+        status_anterior = instance.status_vinculo_tarifa
+        tarifa_anterior_id = instance.lancamento_relacionado_id
+
+        updated = serializer.save(revisado_manual=True)
+
+        if (
+            status_anterior != updated.status_vinculo_tarifa
+            or tarifa_anterior_id != updated.lancamento_relacionado_id
+        ):
+            user = getattr(self.request, "user", None)
+            usuario = (
+                getattr(user, "username", "")
+                or getattr(user, "email", "")
+                or getattr(user, "sub", "")
+                or "SISTEMA"
+            )
+            TarifaVinculoAuditoria.objects.create(
+                lancamento_principal=updated,
+                lancamento_tarifa=updated.lancamento_relacionado,
+                usuario=usuario,
+                origem=OrigemAuditoriaTarifa.MANUAL,
+                status_anterior=status_anterior,
+                status_novo=updated.status_vinculo_tarifa,
+            )
+
+    @action(detail=False, methods=["post"])
+    def conciliar_tarifas(self, request):
+        importacao_id = request.data.get("importacao_id")
+        if not importacao_id:
+            return Response({"detail": "importacao_id é obrigatório."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            importacao = ImportacaoExtrato.objects.get(id=importacao_id)
+        except ImportacaoExtrato.DoesNotExist:
+            return Response({"detail": "Importação não encontrada."}, status=status.HTTP_404_NOT_FOUND)
+
+        from services.conciliador import conciliar_tarifas_importacao
+
+        resultado = conciliar_tarifas_importacao(importacao)
+        return Response(resultado)
+
+    @action(detail=True, methods=["post"])
+    def processar_comprovante(self, request, pk=None):
+        transacao = self.get_object()
+
+        comprovante_data = {
+            "tipo": request.data.get("tipo", "").lower(),
+            "valor_principal": request.data.get("valor_principal", 0),
+            "tarifa_valor": request.data.get("tarifa_valor", 0),
+            "juros_valor": request.data.get("juros_valor", 0),
+            "multa_valor": request.data.get("multa_valor", 0),
+            "desconto_valor": request.data.get("desconto_valor", 0),
+            "documento": request.data.get("documento", ""),
+            "data_pagamento": request.data.get("data_pagamento"),
+            "beneficiario": request.data.get("beneficiario", ""),
+        }
+
+        if not comprovante_data["tipo"]:
+            return Response({"detail": "tipo é obrigatório (pix, ted, boleto, convenio)."}, status=status.HTTP_400_BAD_REQUEST)
+
+        from services.conciliador import processar_comprovante
+
+        user = getattr(request, "user", None)
+        usuario = (
+            getattr(user, "username", "")
+            or getattr(user, "email", "")
+            or getattr(user, "sub", "")
+            or "SISTEMA"
+        )
+
+        resultado = processar_comprovante(transacao, comprovante_data, usuario=usuario)
+        return Response(resultado)
+
+    @action(detail=False, methods=["get"])
+    def exportar(self, request):
+        importacao_id = request.query_params.get("importacao_id")
+        if not importacao_id:
+            return Response({"detail": "importacao_id é obrigatório."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            importacao = ImportacaoExtrato.objects.get(id=importacao_id)
+        except ImportacaoExtrato.DoesNotExist:
+            return Response({"detail": "Importação não encontrada."}, status=status.HTTP_404_NOT_FOUND)
+
+        formato = request.query_params.get("formato", "json").lower()
+        transacoes = TransacaoImportada.objects.filter(importacao=importacao).prefetch_related("componentes").order_by("data_movimento", "id")
+
+        if formato == "csv":
+            import csv
+            import io
+
+            output = io.StringIO()
+            writer = csv.writer(output)
+            writer.writerow([
+                "Data", "Tipo", "Descrição", "Valor Principal", "Juros", "Multa", "Desconto", "Tarifa",
+                "Conta Débito", "Conta Crédito", "Histórico", "Categoria", "Subcategoria", "Status Tarifa"
+            ])
+
+            for t in transacoes:
+                principal = Decimal("0")
+                juros = Decimal("0")
+                multa = Decimal("0")
+                desconto = Decimal("0")
+                tarifa = Decimal("0")
+
+                for comp in t.componentes.all():
+                    if comp.tipo_componente == TipoComponenteLancamento.PRINCIPAL:
+                        principal = comp.valor
+                    elif comp.tipo_componente == TipoComponenteLancamento.JUROS:
+                        juros = comp.valor
+                    elif comp.tipo_componente == TipoComponenteLancamento.MULTA:
+                        multa = comp.valor
+                    elif comp.tipo_componente == TipoComponenteLancamento.DESCONTO:
+                        desconto = comp.valor
+
+                if t.lancamento_relacionado:
+                    tarifa = t.lancamento_relacionado.valor
+
+                writer.writerow([
+                    t.data_movimento.isoformat() if t.data_movimento else "",
+                    t.get_tipo_movimento_display(),
+                    t.descricao_original[:100],
+                    str(principal),
+                    str(juros),
+                    str(multa),
+                    str(desconto),
+                    str(tarifa),
+                    t.conta_debito,
+                    t.conta_credito,
+                    t.codigo_historico,
+                    t.categoria,
+                    t.subcategoria,
+                    t.get_status_vinculo_tarifa_display(),
+                ])
+
+                if t.lancamento_relacionado:
+                    writer.writerow([
+                        t.lancamento_relacionado.data_movimento.isoformat() if t.lancamento_relacionado.data_movimento else "",
+                        "TARIFA",
+                        t.lancamento_relacionado.descricao_original[:100],
+                        "",
+                        "",
+                        "",
+                        "",
+                        str(t.lancamento_relacionado.valor),
+                        "",
+                        "",
+                        "",
+                        "",
+                        "",
+                        t.lancamento_relacionado.get_status_vinculo_tarifa_display() if t.lancamento_relacionado else "",
+                    ])
+
+            output.seek(0)
+            from django.http import StreamingHttpResponse
+
+            response = StreamingHttpResponse(output, content_type="text/csv; charset=utf-8")
+            response["Content-Disposition"] = f'attachment; filename="conciliacao_{importacao.referencia}.csv"'
+            return response
+
+        from decimal import Decimal
+        from app.models import TipoComponenteLancamento
+
+        dados = []
+        for t in transacoes:
+            item = {
+                "id": str(t.id),
+                "data": t.data_movimento.isoformat() if t.data_movimento else None,
+                "descricao": t.descricao_original,
+                "tipo_movimento": t.tipo_movimento,
+                "valor_total": str(t.valor),
+                "componentes": [],
+                "tarifa": None,
+                "conta_debito": t.conta_debito,
+                "conta_credito": t.conta_credito,
+                "codigo_historico": t.codigo_historico,
+                "categoria": t.categoria,
+                "subcategoria": t.subcategoria,
+                "status_tarifa": t.status_vinculo_tarifa,
+            }
+
+            for comp in t.componentes.all():
+                item["componentes"].append({
+                    "tipo": comp.tipo_componente,
+                    "valor": str(comp.valor),
+                    "descricao": comp.descricao,
+                })
+
+            if t.lancamento_relacionado:
+                item["tarifa"] = {
+                    "id": str(t.lancamento_relacionado.id),
+                    "valor": str(t.lancamento_relacionado.valor),
+                    "descricao": t.lancamento_relacionado.descricao_original,
+                    "data": t.lancamento_relacionado.data_movimento.isoformat() if t.lancamento_relacionado.data_movimento else None,
+                }
+
+            dados.append(item)
+
+        return Response({
+            "importacao": str(importacao.id),
+            "referencia": importacao.referencia,
+            "total_lancamentos": len(dados),
+            "lancamentos": dados,
+        })
 
 
 class PerfilConciliacaoViewSet(viewsets.ModelViewSet):
@@ -473,18 +719,33 @@ class ExtratoPreviewView(APIView):
                 status=status.HTTP_422_UNPROCESSABLE_ENTITY,
             )
 
-        lancamentos = [
-            {
-                "linha": l.linha_origem,
-                "data": l.data.isoformat() if l.data else None,
-                "historico": l.descricao_original,
-                "documento": l.documento,
-                "valor": str(l.valor),
-                "natureza": l.natureza_inferida or "INDEFINIDA",
-                "saldo": str(l.saldo) if l.saldo is not None else None,
-            }
-            for l in resultado.lancamentos
-        ]
+        lancamentos = []
+        for l in resultado.lancamentos:
+            descricao_normalizada = normalize_text(l.descricao_original)
+            metadata = describe_transaction_metadata(
+                l.descricao_original,
+                descricao_normalizada=descricao_normalizada,
+                data_movimento=l.data,
+            )
+            lancamentos.append(
+                {
+                    "linha": l.linha_origem,
+                    "data": l.data.isoformat() if l.data else None,
+                    "data_lancamento_extrato": l.data.isoformat() if l.data else None,
+                    "data_ocorrencia": metadata["data_ocorrencia"].isoformat() if metadata["data_ocorrencia"] else None,
+                    "historico": l.descricao_original,
+                    "descricao": l.descricao_original,
+                    "descricao_normalizada": descricao_normalizada,
+                    "documento": l.documento,
+                    "valor": str(l.valor),
+                    "valor_original_do_banco": str(l.valor),
+                    "natureza": l.natureza_inferida or "INDEFINIDA",
+                    "tipo_lancamento": metadata["tipo_lancamento"],
+                    "status_vinculo_tarifa": "NAO_APLICA",
+                    "confianca_vinculo": "BAIXA",
+                    "saldo": str(l.saldo) if l.saldo is not None else None,
+                }
+            )
 
         header = resultado.header
         return Response({
@@ -538,10 +799,17 @@ class ComprovantePreviw(APIView):
                     continue
                 comprovantes.append({
                     "tipo": r.tipo,
+                    "arquivo_nome": arquivo.name,
+                    "pagina": r.pagina,
                     "documento": r.documento,
                     "data_pagamento": r.data_pagamento.isoformat() if r.data_pagamento else None,
                     "beneficiario": r.beneficiario,
+                    "valor_documento": str(r.valor_documento),
                     "valor_total": str(r.valor_total),
+                    "tarifa_valor": str(r.tarifa_valor),
+                    "juros_valor": str(r.juros_valor),
+                    "multa_valor": str(r.multa_valor),
+                    "desconto_valor": str(r.desconto_valor),
                     "itens": [
                         {"descricao": it.descricao, "valor": str(it.valor)}
                         for it in r.itens

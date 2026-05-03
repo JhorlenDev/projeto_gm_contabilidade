@@ -54,6 +54,39 @@ class TipoComparacao(models.TextChoices):
     COMECA_COM = "COMECA_COM", "Começa com"
 
 
+class TipoLancamento(models.TextChoices):
+    PRINCIPAL = "PRINCIPAL", "Principal"
+    TARIFA = "TARIFA", "Tarifa"
+    TARIFA_AGRUPADA = "TARIFA_AGRUPADA", "Tarifa agrupada"
+    OUTRO = "OUTRO", "Outro"
+
+
+class StatusVinculoTarifa(models.TextChoices):
+    NAO_APLICA = "NAO_APLICA", "Não aplica"
+    ENCONTRADA = "ENCONTRADA", "Encontrada"
+    AGRUPADA = "AGRUPADA", "Agrupada"
+    NAO_ENCONTRADA = "NAO_ENCONTRADA", "Não encontrada"
+
+
+class ConfiancaVinculo(models.TextChoices):
+    ALTA = "ALTA", "Alta"
+    MEDIA = "MEDIA", "Média"
+    BAIXA = "BAIXA", "Baixa"
+
+
+class TipoComponenteLancamento(models.TextChoices):
+    PRINCIPAL = "PRINCIPAL", "Principal"
+    JUROS = "JUROS", "Juros"
+    MULTA = "MULTA", "Multa"
+    DESCONTO = "DESCONTO", "Desconto"
+    OUTROS = "OUTROS", "Outros"
+
+
+class OrigemAuditoriaTarifa(models.TextChoices):
+    AUTOMATICA = "AUTOMATICA", "Automática"
+    MANUAL = "MANUAL", "Manual"
+
+
 class Cliente(models.Model):
     class Situacao(models.TextChoices):
         ATIVO = "ATIVO", "Ativo"
@@ -313,16 +346,36 @@ class TransacaoImportada(models.Model):
     importacao = models.ForeignKey(ImportacaoExtrato, on_delete=models.CASCADE, related_name="transacoes")
     linha_origem = models.PositiveIntegerField(null=True, blank=True)
     data_movimento = models.DateField(db_index=True)
+    data_ocorrencia = models.DateField(null=True, blank=True, db_index=True)
     descricao_original = models.TextField()
     descricao_normalizada = models.TextField(blank=True, default="", db_index=True)
     valor = models.DecimalField(max_digits=14, decimal_places=2)
     tipo_movimento = models.CharField(max_length=20, choices=TipoMovimento.choices, db_index=True)
+    tipo_lancamento = models.CharField(max_length=20, choices=TipoLancamento.choices, default=TipoLancamento.PRINCIPAL, db_index=True)
     regra_aplicada = models.ForeignKey(
         RegraConciliador,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
         related_name="transacoes",
+    )
+    lancamento_relacionado = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="lancamentos_relacionados",
+    )
+    status_vinculo_tarifa = models.CharField(
+        max_length=20,
+        choices=StatusVinculoTarifa.choices,
+        default=StatusVinculoTarifa.NAO_APLICA,
+        db_index=True,
+    )
+    confianca_vinculo = models.CharField(
+        max_length=10,
+        choices=ConfiancaVinculo.choices,
+        default=ConfiancaVinculo.BAIXA,
     )
     categoria = models.CharField(max_length=120, blank=True, default="")
     subcategoria = models.CharField(max_length=120, blank=True, default="")
@@ -339,11 +392,72 @@ class TransacaoImportada(models.Model):
         indexes = [
             models.Index(fields=["importacao", "data_movimento"]),
             models.Index(fields=["importacao", "tipo_movimento"]),
+            models.Index(fields=["importacao", "tipo_lancamento"]),
+            models.Index(fields=["importacao", "status_vinculo_tarifa"]),
             models.Index(fields=["regra_aplicada"]),
         ]
 
     def __str__(self):
         return f"{self.data_movimento} - {self.descricao_original[:40]}"
+
+
+class LancamentoComponente(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    lancamento = models.ForeignKey(TransacaoImportada, on_delete=models.CASCADE, related_name="componentes")
+    tipo_componente = models.CharField(
+        max_length=20,
+        choices=TipoComponenteLancamento.choices,
+        default=TipoComponenteLancamento.PRINCIPAL,
+        db_index=True,
+    )
+    valor = models.DecimalField(max_digits=14, decimal_places=2)
+    descricao = models.CharField(max_length=255, blank=True, default="")
+    criado_em = models.DateTimeField(auto_now_add=True)
+    atualizado_em = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["criado_em", "id"]
+        indexes = [
+            models.Index(fields=["lancamento", "tipo_componente"]),
+        ]
+
+    def __str__(self):
+        return f"{self.lancamento_id} - {self.tipo_componente} - {self.valor}"
+
+
+class TarifaVinculoAuditoria(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    lancamento_principal = models.ForeignKey(
+        TransacaoImportada,
+        on_delete=models.CASCADE,
+        related_name="auditorias_tarifa_principal",
+    )
+    lancamento_tarifa = models.ForeignKey(
+        TransacaoImportada,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="auditorias_tarifa_relacionada",
+    )
+    usuario = models.CharField(max_length=255, blank=True, default="SISTEMA")
+    origem = models.CharField(
+        max_length=20,
+        choices=OrigemAuditoriaTarifa.choices,
+        default=OrigemAuditoriaTarifa.AUTOMATICA,
+    )
+    status_anterior = models.CharField(max_length=20, choices=StatusVinculoTarifa.choices, default=StatusVinculoTarifa.NAO_APLICA)
+    status_novo = models.CharField(max_length=20, choices=StatusVinculoTarifa.choices, default=StatusVinculoTarifa.NAO_APLICA)
+    criado_em = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-criado_em"]
+        indexes = [
+            models.Index(fields=["lancamento_principal", "criado_em"]),
+            models.Index(fields=["lancamento_tarifa", "criado_em"]),
+        ]
+
+    def __str__(self):
+        return f"{self.lancamento_principal_id} - {self.status_anterior} -> {self.status_novo}"
 
 
 class ExtratoHistorico(models.Model):

@@ -7,7 +7,31 @@ from pathlib import Path
 from django.utils import timezone
 from rest_framework import serializers
 
-from .models import Banco, Cliente, ContaCliente, CertificadoDigitalCliente, Escritorio, HistoricoContabil, ImportacaoExtrato, PerfilConciliacao, PlanoContas, RegraConciliador, TransacaoImportada, TipoArquivo, TipoComparacao, TipoContaCliente, TipoMovimento
+from services.conciliador import normalize_text
+
+from .models import (
+    Banco,
+    CertificadoDigitalCliente,
+    Cliente,
+    ConfiancaVinculo,
+    ContaCliente,
+    Escritorio,
+    HistoricoContabil,
+    ImportacaoExtrato,
+    LancamentoComponente,
+    PerfilConciliacao,
+    PlanoContas,
+    RegraConciliador,
+    StatusVinculoTarifa,
+    TarifaVinculoAuditoria,
+    TransacaoImportada,
+    TipoArquivo,
+    TipoComparacao,
+    TipoComponenteLancamento,
+    TipoContaCliente,
+    TipoLancamento,
+    TipoMovimento,
+)
 
 
 def _normalize_situacao(value: str) -> str:
@@ -512,16 +536,73 @@ class ImportacaoExtratoSerializer(serializers.ModelSerializer):
         return obj.transacoes.filter(regra_aplicada__isnull=True, revisado_manual=False).count()
 
 
+class LancamentoComponenteSerializer(serializers.ModelSerializer):
+    id = serializers.UUIDField(required=False)
+    tipo_componente_label = serializers.CharField(source="get_tipo_componente_display", read_only=True)
+    valor_formatado = serializers.SerializerMethodField()
+
+    class Meta:
+        model = LancamentoComponente
+        fields = [
+            "id",
+            "lancamento",
+            "tipo_componente",
+            "tipo_componente_label",
+            "valor",
+            "valor_formatado",
+            "descricao",
+            "criado_em",
+            "atualizado_em",
+        ]
+        read_only_fields = ["lancamento", "tipo_componente_label", "valor_formatado", "criado_em", "atualizado_em"]
+
+    def validate_tipo_componente(self, value):
+        return value or TipoComponenteLancamento.PRINCIPAL
+
+    def validate_descricao(self, value):
+        return _strip_text(value)
+
+    def get_valor_formatado(self, obj):
+        return _format_currency(obj.valor)
+
+
+class TarifaVinculoAuditoriaSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TarifaVinculoAuditoria
+        fields = [
+            "id",
+            "lancamento_principal",
+            "lancamento_tarifa",
+            "usuario",
+            "origem",
+            "status_anterior",
+            "status_novo",
+            "criado_em",
+        ]
+        read_only_fields = fields
+
+
 class TransacaoImportadaSerializer(serializers.ModelSerializer):
     importacao_status = serializers.CharField(source="importacao.status", read_only=True)
     regra_aplicada_nome = serializers.CharField(source="regra_aplicada.nome", read_only=True)
     regra_aplicada_texto = serializers.CharField(source="regra_aplicada.texto_referencia", read_only=True)
     tipo_movimento_label = serializers.CharField(source="get_tipo_movimento_display", read_only=True)
+    tipo_lancamento_label = serializers.CharField(source="get_tipo_lancamento_display", read_only=True)
+    status_vinculo_tarifa_label = serializers.CharField(source="get_status_vinculo_tarifa_display", read_only=True)
+    confianca_vinculo_label = serializers.CharField(source="get_confianca_vinculo_display", read_only=True)
     valor_formatado = serializers.SerializerMethodField()
     debito = serializers.SerializerMethodField()
     credito = serializers.SerializerMethodField()
     historico_final = serializers.SerializerMethodField()
     status_aplicacao = serializers.SerializerMethodField()
+    data_lancamento_extrato = serializers.DateField(source="data_movimento", read_only=True)
+    descricao = serializers.CharField(source="descricao_original", read_only=True)
+    componentes = LancamentoComponenteSerializer(many=True, required=False)
+    tarifa_vinculada = serializers.SerializerMethodField()
+    badge_tarifa = serializers.SerializerMethodField()
+    composicao = serializers.SerializerMethodField()
+    is_boleto = serializers.SerializerMethodField()
+    is_pix_ted = serializers.SerializerMethodField()
 
     class Meta:
         model = TransacaoImportada
@@ -531,12 +612,22 @@ class TransacaoImportadaSerializer(serializers.ModelSerializer):
             "importacao_status",
             "linha_origem",
             "data_movimento",
+            "data_lancamento_extrato",
+            "data_ocorrencia",
+            "descricao",
             "descricao_original",
             "descricao_normalizada",
             "valor",
             "valor_formatado",
             "tipo_movimento",
             "tipo_movimento_label",
+            "tipo_lancamento",
+            "tipo_lancamento_label",
+            "lancamento_relacionado",
+            "status_vinculo_tarifa",
+            "status_vinculo_tarifa_label",
+            "confianca_vinculo",
+            "confianca_vinculo_label",
             "regra_aplicada",
             "regra_aplicada_nome",
             "regra_aplicada_texto",
@@ -551,6 +642,13 @@ class TransacaoImportadaSerializer(serializers.ModelSerializer):
             "credito",
             "historico_final",
             "status_aplicacao",
+            "componentes",
+            "tarifa_vinculada",
+            "badge_tarifa",
+            "composicao",
+            "is_boleto",
+            "is_pix_ted",
+            "mostrar_botao_tarifa",
             "criado_em",
             "atualizado_em",
         ]
@@ -559,15 +657,31 @@ class TransacaoImportadaSerializer(serializers.ModelSerializer):
             "importacao",
             "importacao_status",
             "linha_origem",
+            "data_lancamento_extrato",
+            "tarifa_vinculada",
+            "badge_tarifa",
+            "composicao",
+            "is_boleto",
+            "is_pix_ted",
+            "mostrar_botao_tarifa",
+            "descricao",
             "descricao_original",
             "valor_formatado",
             "tipo_movimento_label",
+            "tipo_lancamento_label",
+            "status_vinculo_tarifa_label",
+            "confianca_vinculo_label",
             "regra_aplicada_nome",
             "regra_aplicada_texto",
             "debito",
             "credito",
             "historico_final",
             "status_aplicacao",
+            "tarifa_vinculada",
+            "badge_tarifa",
+            "composicao",
+            "is_boleto",
+            "is_pix_ted",
             "criado_em",
             "atualizado_em",
         ]
@@ -580,10 +694,102 @@ class TransacaoImportadaSerializer(serializers.ModelSerializer):
             "codigo_historico": {"required": False, "allow_blank": True},
             "revisado_manual": {"required": False},
             "regra_aplicada": {"required": False, "allow_null": True},
+            "data_ocorrencia": {"required": False, "allow_null": True},
+            "lancamento_relacionado": {"required": False, "allow_null": True},
+            "tipo_lancamento": {"required": False},
+            "status_vinculo_tarifa": {"required": False},
+            "confianca_vinculo": {"required": False},
         }
 
+    def get_tarifa_vinculada(self, obj):
+        if not obj.lancamento_relacionado:
+            return None
+        return {
+            "id": str(obj.lancamento_relacionado.id),
+            "valor": str(obj.lancamento_relacionado.valor),
+            "valor_formatado": _format_currency(obj.lancamento_relacionado.valor),
+            "descricao": obj.lancamento_relacionado.descricao_original[:60],
+            "data_movimento": obj.lancamento_relacionado.data_movimento.isoformat() if obj.lancamento_relacionado.data_movimento else None,
+            "tipo_lancamento": obj.lancamento_relacionado.tipo_lancamento,
+        }
+
+    def get_badge_tarifa(self, obj):
+        if obj.tipo_lancamento != TipoLancamento.PRINCIPAL:
+            return None
+
+        desc_norm = (obj.descricao_normalizada or "").upper()
+        is_pix_ted = "PIX" in desc_norm or "TED" in desc_norm
+
+        status = obj.status_vinculo_tarifa
+
+        if status == StatusVinculoTarifa.ENCONTRADA:
+            return {"texto": "tarifa vinculada", "icone": "✔", "cor": "green"}
+        if status == StatusVinculoTarifa.AGRUPADA:
+            if is_pix_ted:
+                return None
+            return {"texto": "tarifa agrupada", "icone": "⚠", "cor": "yellow"}
+        if status == StatusVinculoTarifa.NAO_ENCONTRADA:
+            return None
+
+        if is_pix_ted:
+            return {"texto": "+ tarifa", "icone": "+", "cor": "gray"}
+        return None
+
+    def get_composicao(self, obj):
+        componentes = obj.componentes.all()
+        if not componentes:
+            return None
+
+        items = []
+        total = Decimal("0")
+        for comp in componentes:
+            if comp.tipo_componente == TipoComponenteLancamento.PRINCIPAL:
+                items.append({"tipo": "Principal", "valor": comp.valor, "valor_formatado": _format_currency(comp.valor)})
+                total += comp.valor
+            elif comp.tipo_componente == TipoComponenteLancamento.JUROS and comp.valor > 0:
+                items.append({"tipo": "Juros", "valor": comp.valor, "valor_formatado": _format_currency(comp.valor)})
+                total += comp.valor
+            elif comp.tipo_componente == TipoComponenteLancamento.MULTA and comp.valor > 0:
+                items.append({"tipo": "Multa", "valor": comp.valor, "valor_formatado": _format_currency(comp.valor)})
+                total += comp.valor
+            elif comp.tipo_componente == TipoComponenteLancamento.DESCONTO and comp.valor > 0:
+                items.append({"tipo": "Desconto", "valor": comp.valor, "valor_formatado": _format_currency(comp.valor)})
+                total -= comp.valor
+
+        if len(items) <= 1:
+            return None
+
+        return {
+            "itens": items,
+            "total": total,
+            "total_formatado": _format_currency(total),
+        }
+
+    def get_is_boleto(self, obj):
+        desc_norm = (obj.descricao_normalizada or "").upper()
+        return any(kw in desc_norm for kw in ["BOLETO", "PAGAMENTO", "TITULO", "COBRANCA"])
+
+    def get_is_pix_ted(self, obj):
+        if obj.tipo_lancamento == TipoLancamento.PRINCIPAL:
+            desc_norm = (obj.descricao_normalizada or "").upper()
+            return "PIX" in desc_norm or "TED" in desc_norm
+        return False
+
+    def get_mostrar_botao_tarifa(self, obj):
+        if obj.tipo_lancamento != TipoLancamento.PRINCIPAL:
+            return False
+        desc_norm = (obj.descricao_normalizada or "").upper()
+        is_pix_ted = "PIX" in desc_norm or "TED" in desc_norm
+        if is_pix_ted:
+            return False
+        return obj.status_vinculo_tarifa in [
+            StatusVinculoTarifa.ENCONTRADA,
+            StatusVinculoTarifa.AGRUPADA,
+            StatusVinculoTarifa.NAO_ENCONTRADA,
+        ]
+
     def validate_descricao_normalizada(self, value):
-        return _strip_text(value)
+        return normalize_text(value)
 
     def validate_categoria(self, value):
         return _strip_text(value)
@@ -600,8 +806,60 @@ class TransacaoImportadaSerializer(serializers.ModelSerializer):
     def validate_codigo_historico(self, value):
         return _strip_text(value)
 
+    def validate_tipo_lancamento(self, value):
+        return value or TipoLancamento.PRINCIPAL
+
+    def validate_status_vinculo_tarifa(self, value):
+        return value or StatusVinculoTarifa.NAO_APLICA
+
+    def validate_confianca_vinculo(self, value):
+        return value or ConfiancaVinculo.BAIXA
+
     def validate_dados_brutos(self, value):
         return value if isinstance(value, dict) else {}
+
+    def _sync_componentes(self, instance, componentes_data):
+        existing = {str(obj.id): obj for obj in instance.componentes.all()}
+        keep_ids = set()
+
+        for item in componentes_data:
+            component_id = str(item.get("id") or "").strip()
+            payload = {
+                "tipo_componente": item.get("tipo_componente") or TipoComponenteLancamento.PRINCIPAL,
+                "valor": item.get("valor") or Decimal("0"),
+                "descricao": _strip_text(item.get("descricao")),
+            }
+
+            if component_id and component_id in existing:
+                component = existing[component_id]
+                changed_fields = []
+                for field_name, value in payload.items():
+                    if getattr(component, field_name) != value:
+                        setattr(component, field_name, value)
+                        changed_fields.append(field_name)
+                if changed_fields:
+                    component.save(update_fields=[*changed_fields, "atualizado_em"])
+                keep_ids.add(component_id)
+                continue
+
+            component = LancamentoComponente.objects.create(lancamento=instance, **payload)
+            keep_ids.add(str(component.id))
+
+        instance.componentes.exclude(id__in=keep_ids).delete()
+
+    def create(self, validated_data):
+        componentes_data = validated_data.pop("componentes", [])
+        instance = super().create(validated_data)
+        if componentes_data:
+            self._sync_componentes(instance, componentes_data)
+        return instance
+
+    def update(self, instance, validated_data):
+        componentes_data = validated_data.pop("componentes", None)
+        instance = super().update(instance, validated_data)
+        if componentes_data is not None:
+            self._sync_componentes(instance, componentes_data)
+        return instance
 
     def get_valor_formatado(self, obj):
         return _format_currency(obj.valor)

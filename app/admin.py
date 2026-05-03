@@ -1,6 +1,18 @@
 from django.contrib import admin
 
-from .models import Banco, Cliente, ContaCliente, CertificadoDigitalCliente, Escritorio, ImportacaoExtrato, KeycloakUser, RegraConciliador, TransacaoImportada
+from .models import (
+    Banco,
+    CertificadoDigitalCliente,
+    Cliente,
+    ContaCliente,
+    Escritorio,
+    ImportacaoExtrato,
+    KeycloakUser,
+    LancamentoComponente,
+    RegraConciliador,
+    TarifaVinculoAuditoria,
+    TransacaoImportada,
+)
 
 
 @admin.register(Cliente)
@@ -60,10 +72,35 @@ class RegraConciliadorAdmin(admin.ModelAdmin):
 
 @admin.register(TransacaoImportada)
 class TransacaoImportadaAdmin(admin.ModelAdmin):
-    list_display = ("data_movimento", "descricao_original", "valor", "tipo_movimento", "regra_aplicada", "revisado_manual")
-    list_filter = ("tipo_movimento", "revisado_manual", "data_movimento")
+    list_display = (
+        "data_movimento",
+        "descricao_original",
+        "valor",
+        "tipo_movimento",
+        "tipo_lancamento",
+        "status_vinculo_tarifa",
+        "regra_aplicada",
+        "revisado_manual",
+    )
+    list_filter = ("tipo_movimento", "tipo_lancamento", "status_vinculo_tarifa", "revisado_manual", "data_movimento")
     search_fields = ("descricao_original", "descricao_normalizada", "categoria", "codigo_historico")
     ordering = ("-data_movimento",)
+
+
+@admin.register(LancamentoComponente)
+class LancamentoComponenteAdmin(admin.ModelAdmin):
+    list_display = ("lancamento", "tipo_componente", "valor", "descricao", "atualizado_em")
+    list_filter = ("tipo_componente",)
+    search_fields = ("descricao", "lancamento__descricao_original")
+    ordering = ("lancamento", "tipo_componente")
+
+
+@admin.register(TarifaVinculoAuditoria)
+class TarifaVinculoAuditoriaAdmin(admin.ModelAdmin):
+    list_display = ("lancamento_principal", "lancamento_tarifa", "origem", "usuario", "status_anterior", "status_novo", "criado_em")
+    list_filter = ("origem", "status_anterior", "status_novo", "criado_em")
+    search_fields = ("usuario", "lancamento_principal__descricao_original", "lancamento_tarifa__descricao_original")
+    ordering = ("-criado_em",)
 
 
 @admin.register(KeycloakUser)

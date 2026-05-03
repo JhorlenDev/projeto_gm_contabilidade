@@ -14,17 +14,31 @@ from typing import Any
 
 from django.db import transaction
 from django.db.models import Q
+from django.utils import timezone
 
 user_site = site.getusersitepackages()
 if isinstance(user_site, str) and user_site and user_site not in sys.path:
     sys.path.append(user_site)
 
-from app.models import ImportacaoExtrato, RegraConciliador, StatusImportacao, TipoArquivo, TipoComparacao, TipoMovimento, TransacaoImportada
+from app.models import (
+    ConfiancaVinculo,
+    ImportacaoExtrato,
+    LancamentoComponente,
+    RegraConciliador,
+    StatusImportacao,
+    StatusVinculoTarifa,
+    TipoArquivo,
+    TipoComponenteLancamento,
+    TipoComparacao,
+    TipoLancamento,
+    TipoMovimento,
+    TransacaoImportada,
+)
 
 
 MONTH_LABELS = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"]
 DEFAULT_NORMALIZATION_OPTIONS = {
-    "remover_numeros": True,
+    "remover_numeros": False,
     "remover_especiais": True,
     "remover_acentos": True,
     "maiusculo": True,
@@ -36,10 +50,12 @@ DEFAULT_NORMALIZATION_OPTIONS = {
 class ParsedTransaction:
     linha_origem: int | None
     data_movimento: date
+    data_ocorrencia: date | None
     descricao_original: str
     descricao_normalizada: str
     valor: Decimal
     tipo_movimento: str
+    tipo_lancamento: str
     dados_brutos: dict[str, Any]
 
 
@@ -63,13 +79,14 @@ def normalize_text(value: Any, *, options: dict[str, Any] | None = None) -> str:
     if merged.get("remover_acentos", True):
         text = "".join(char for char in text if not unicodedata.combining(char))
 
+    text = re.sub(r"[-–—_/\\|]+", " ", text)
+
     if merged.get("remover_numeros", True):
         text = re.sub(r"\d+", " ", text)
 
     if merged.get("remover_especiais", True):
         text = re.sub(r"[^\w\s]", " ", text, flags=re.UNICODE)
 
-    text = re.sub(r"[_/\\|\-]+", " ", text)
     if merged.get("colapsar_espacos", True):
         text = re.sub(r"\s+", " ", text)
 
@@ -195,6 +212,102 @@ def _parse_date(value: Any, *, date_format: str | None = None, reference_date: d
             continue
 
     raise ValueError(f"Não foi possível interpretar a data '{text}'.")
+
+
+def _extract_occurrence_date(description: str, *, reference_date: date | None = None) -> date | None:
+    text = str(description or "")
+    patterns = [
+        r"OCORR(?:E|Ê)NCIA\s*(\d{2}/\d{2}/\d{2,4})",
+        r"OCORR\.?\s*(\d{2}/\d{2}/\d{2,4})",
+        r"TAR\.?\s+AGRUPADAS\s*[-:]?\s*OCORR(?:E|Ê)NCIA\s*(\d{2}/\d{2}/\d{2,4})",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if not match:
+            continue
+        try:
+            return _parse_date(match.group(1), reference_date=reference_date)
+        except ValueError:
+            continue
+    return None
+
+
+def _classify_transaction(parsed: ParsedTransaction) -> tuple[str, date | None]:
+    description = parsed.descricao_normalizada or normalize_text(parsed.descricao_original)
+    occurrence_date = _extract_occurrence_date(parsed.descricao_original, reference_date=parsed.data_movimento) or parsed.data_movimento
+
+    grouped_patterns = [
+        "DEBITO SERVICO COBRANCA",
+        "DEBITO SERVICO COBRANCA",
+        "TAR AGRUPADAS",
+        "TARIFAS AGRUPADAS",
+    ]
+    if any(pattern in description for pattern in grouped_patterns):
+        return TipoLancamento.TARIFA_AGRUPADA, occurrence_date
+
+    tariff_patterns = [
+        "TARIFA",
+        "PACOTE SERVICOS",
+        "PACOTE DE SERVICOS",
+        "MANUTENCAO PJ",
+        "MENSALIDADE PACOTE",
+        "SERVICO COBRANCA",
+    ]
+    if any(pattern in description for pattern in tariff_patterns):
+        return TipoLancamento.TARIFA, occurrence_date
+
+    return TipoLancamento.PRINCIPAL, None
+
+
+def _sync_default_component(transaction_obj: TransacaoImportada) -> None:
+    if transaction_obj.tipo_lancamento != TipoLancamento.PRINCIPAL:
+        transaction_obj.componentes.all().delete()
+        return
+
+    component, _created = LancamentoComponente.objects.get_or_create(
+        lancamento=transaction_obj,
+        tipo_componente=TipoComponenteLancamento.PRINCIPAL,
+        defaults={
+            "valor": transaction_obj.valor,
+            "descricao": transaction_obj.descricao_original[:255],
+        },
+    )
+    changed = False
+    if component.valor != transaction_obj.valor:
+        component.valor = transaction_obj.valor
+        changed = True
+    descricao = transaction_obj.descricao_original[:255]
+    if component.descricao != descricao:
+        component.descricao = descricao
+        changed = True
+    if changed:
+        component.save(update_fields=["valor", "descricao", "atualizado_em"])
+
+
+def describe_transaction_metadata(
+    descricao_original: str,
+    *,
+    descricao_normalizada: str = "",
+    data_movimento: date | None = None,
+) -> dict[str, Any]:
+    normalized = descricao_normalizada or normalize_text(descricao_original)
+    fallback_date = data_movimento or timezone.localdate()
+    parsed = ParsedTransaction(
+        linha_origem=None,
+        data_movimento=fallback_date,
+        data_ocorrencia=None,
+        descricao_original=descricao_original,
+        descricao_normalizada=normalized,
+        valor=Decimal("0"),
+        tipo_movimento=TipoMovimento.AMBOS,
+        tipo_lancamento=TipoLancamento.PRINCIPAL,
+        dados_brutos={},
+    )
+    tipo_lancamento, data_ocorrencia = _classify_transaction(parsed)
+    return {
+        "tipo_lancamento": tipo_lancamento,
+        "data_ocorrencia": data_ocorrencia,
+    }
 
 
 def _extract_csv_rows(uploaded_file) -> tuple[list[str], list[dict[str, Any]]]:
@@ -340,13 +453,31 @@ def _build_transaction_row(
     data_movimento = _parse_date(raw_data, date_format=date_format or None, reference_date=referencia)
     descricao_normalizada = normalize_text(descricao_original, options=normalizacao or None)
 
-    return ParsedTransaction(
+    provisional = ParsedTransaction(
         linha_origem=linha_origem,
         data_movimento=data_movimento,
+        data_ocorrencia=None,
         descricao_original=descricao_original,
         descricao_normalizada=descricao_normalizada,
         valor=abs(valor),
         tipo_movimento=tipo_movimento,
+        tipo_lancamento=TipoLancamento.PRINCIPAL,
+        dados_brutos={
+            **row,
+            "__linha_origem__": linha_origem,
+        },
+    )
+    tipo_lancamento, data_ocorrencia = _classify_transaction(provisional)
+
+    return ParsedTransaction(
+        linha_origem=linha_origem,
+        data_movimento=data_movimento,
+        data_ocorrencia=data_ocorrencia,
+        descricao_original=descricao_original,
+        descricao_normalizada=descricao_normalizada,
+        valor=abs(valor),
+        tipo_movimento=tipo_movimento,
+        tipo_lancamento=tipo_lancamento,
         dados_brutos={
             **row,
             "__linha_origem__": linha_origem,
@@ -433,10 +564,15 @@ def process_importacao(importacao: ImportacaoExtrato, configuracao: dict[str, An
             transaction_obj = existing.get(line_number)
             defaults = {
                 "data_movimento": parsed.data_movimento,
+                "data_ocorrencia": parsed.data_ocorrencia,
                 "descricao_original": parsed.descricao_original,
                 "descricao_normalizada": parsed.descricao_normalizada,
                 "valor": parsed.valor,
                 "tipo_movimento": parsed.tipo_movimento,
+                "tipo_lancamento": parsed.tipo_lancamento,
+                "lancamento_relacionado": None,
+                "status_vinculo_tarifa": StatusVinculoTarifa.NAO_APLICA,
+                "confianca_vinculo": ConfiancaVinculo.BAIXA,
                 "dados_brutos": parsed.dados_brutos,
             }
 
@@ -450,6 +586,11 @@ def process_importacao(importacao: ImportacaoExtrato, configuracao: dict[str, An
                             "conta_debito": transaction_obj.conta_debito,
                             "conta_credito": transaction_obj.conta_credito,
                             "codigo_historico": transaction_obj.codigo_historico,
+                            "tipo_lancamento": transaction_obj.tipo_lancamento,
+                            "data_ocorrencia": transaction_obj.data_ocorrencia,
+                            "lancamento_relacionado": transaction_obj.lancamento_relacionado,
+                            "status_vinculo_tarifa": transaction_obj.status_vinculo_tarifa,
+                            "confianca_vinculo": transaction_obj.confianca_vinculo,
                             "regra_aplicada": transaction_obj.regra_aplicada,
                             "revisado_manual": True,
                         }
@@ -463,15 +604,20 @@ def process_importacao(importacao: ImportacaoExtrato, configuracao: dict[str, An
                             "conta_debito": "",
                             "conta_credito": "",
                             "codigo_historico": "",
+                            "lancamento_relacionado": None,
+                            "status_vinculo_tarifa": StatusVinculoTarifa.NAO_APLICA,
+                            "confianca_vinculo": ConfiancaVinculo.BAIXA,
                             "revisado_manual": False,
                         }
                     )
 
-            TransacaoImportada.objects.update_or_create(
+            transaction_obj, _created = TransacaoImportada.objects.update_or_create(
                 importacao=importacao,
                 linha_origem=line_number,
                 defaults=defaults,
             )
+            if not transaction_obj.revisado_manual:
+                _sync_default_component(transaction_obj)
 
         if seen_lines:
             importacao.transacoes.exclude(linha_origem__in=seen_lines).filter(revisado_manual=False).delete()
@@ -532,6 +678,8 @@ def apply_rules_to_importacao(importacao: ImportacaoExtrato) -> dict[str, Any]:
         pending = 0
         manual = 0
 
+        transacoes_para_atualizar = []
+
         for transaction_obj in importacao.transacoes.select_related("regra_aplicada").order_by("data_movimento", "id"):
             if transaction_obj.revisado_manual:
                 manual += 1
@@ -556,8 +704,12 @@ def apply_rules_to_importacao(importacao: ImportacaoExtrato) -> dict[str, Any]:
                 transaction_obj.codigo_historico = ""
                 pending += 1
 
-            transaction_obj.save(
-                update_fields=[
+            transacoes_para_atualizar.append(transaction_obj)
+
+        if transacoes_para_atualizar:
+            TransacaoImportada.objects.bulk_update(
+                transacoes_para_atualizar,
+                [
                     "regra_aplicada",
                     "categoria",
                     "subcategoria",
@@ -565,7 +717,7 @@ def apply_rules_to_importacao(importacao: ImportacaoExtrato) -> dict[str, Any]:
                     "conta_credito",
                     "codigo_historico",
                     "atualizado_em",
-                ]
+                ],
             )
 
         return {
@@ -574,3 +726,343 @@ def apply_rules_to_importacao(importacao: ImportacaoExtrato) -> dict[str, Any]:
             "manuais": manual,
             "regras_disponiveis": len(rules),
         }
+
+
+def processar_comprovante(
+    transacao: TransacaoImportada,
+    comprovante_data: dict,
+    *,
+    usuario: str = "SISTEMA",
+) -> dict[str, Any]:
+    """
+    Processa dados de um comprovante e cria/atualiza componentes do lançamento.
+
+    Args:
+        transacao: TransacaoImportada alvo
+        comprovante_data: dict com keys:
+            - tipo: "pix" | "ted" | "boleto" | "convenio"
+            - valor_principal: Decimal
+            - tarifa_valor: Decimal (opcional)
+            - juros_valor: Decimal (opcional)
+            - multa_valor: Decimal (opcional)
+            - desconto_valor: Decimal (opcional)
+            - documento: str (opcional)
+            - data_pagamento: date (opcional)
+            - beneficiario: str (opcional)
+    """
+    from app.models import (
+        LancamentoComponente,
+        OrigemAuditoriaTarifa,
+        TarifaVinculoAuditoria,
+    )
+
+    tipo = comprobante_data.get("tipo", "").lower()
+    valor_principal = Decimal(str(comprovante_data.get("valor_principal", 0)))
+    tarifa_valor = Decimal(str(comprovante_data.get("tarifa_valor", 0)))
+    juros_valor = Decimal(str(comprovante_data.get("juros_valor", 0)))
+    multa_valor = Decimal(str(comprovante_data.get("multa_valor", 0)))
+    desconto_valor = Decimal(str(comprovante_data.get("desconto_valor", 0)))
+
+    if tipo in {"pix", "ted"}:
+        _criar_componente_principal(transacao, valor_principal)
+        if tarifa_valor > 0:
+            _processar_tarifa_pix_ted(transacao, tarifa_valor, comprovante_data, usuario)
+        return {
+            "componentes_criados": 1,
+            "tarifa_processada": tarifa_valor > 0,
+            "tipo": tipo,
+        }
+
+    if tipo in {"boleto", "convenio"}:
+        _criar_componentes_boleto(
+            transacao,
+            valor_principal,
+            juros_valor,
+            multa_valor,
+            desconto_valor,
+            comprovante_data,
+        )
+        return {
+            "componentes_criados": 1 + sum(1 for v in [juros_valor, multa_valor, desconto_valor] if v > 0),
+            "tarifa_processada": False,
+            "tipo": tipo,
+        }
+
+    return {"erro": f"Tipo de comprovante não suportado: {tipo}"}
+
+
+def _criar_componente_principal(transacao: TransacaoImportada, valor: Decimal) -> None:
+    LancamentoComponente.objects.update_or_create(
+        lancamento=transacao,
+        tipo_componente=TipoComponenteLancamento.PRINCIPAL,
+        defaults={
+            "valor": abs(valor),
+            "descricao": transacao.descricao_original[:255],
+        },
+    )
+
+
+def _criar_componentes_boleto(
+    transacao: TransacaoImportada,
+    principal: Decimal,
+    juros: Decimal,
+    multa: Decimal,
+    desconto: Decimal,
+    comprovante_data: dict,
+) -> None:
+    LancamentoComponente.objects.update_or_create(
+        lancamento=transacao,
+        tipo_componente=TipoComponenteLancamento.PRINCIPAL,
+        defaults={
+            "valor": abs(principal),
+            "descricao": f"Principal - {comprovante_data.get('beneficiario', 'Boleto')}",
+        },
+    )
+
+    if juros > 0:
+        LancamentoComponente.objects.update_or_create(
+            lancamento=transacao,
+            tipo_componente=TipoComponenteLancamento.JUROS,
+            defaults={
+                "valor": abs(juros),
+                "descricao": "Juros de boleto",
+            },
+        )
+
+    if multa > 0:
+        LancamentoComponente.objects.update_or_create(
+            lancamento=transacao,
+            tipo_componente=TipoComponenteLancamento.MULTA,
+            defaults={
+                "valor": abs(multa),
+                "descricao": "Multa de boleto",
+            },
+        )
+
+    if desconto > 0:
+        LancamentoComponente.objects.update_or_create(
+            lancamento=transacao,
+            tipo_componente=TipoComponenteLancamento.DESCONTO,
+            defaults={
+                "valor": abs(desconto),
+                "descricao": "Desconto de boleto",
+            },
+        )
+
+    valor_total = principal + juros + multa - desconto
+    transacao.valor = abs(valor_total)
+    transacao.save(update_fields=["valor", "atualizado_em"])
+
+
+def _processar_tarifa_pix_ted(
+    transacao: TransacaoImportada,
+    tarifa_valor: Decimal,
+    comprovante_data: dict,
+    usuario: str,
+) -> None:
+    from app.models import OrigemAuditoriaTarifa, TarifaVinculoAuditoria
+
+    status_anterior = transacao.status_vinculo_tarifa
+    tarifa_existente = transacao.lancamento_relacionado
+
+    tarifa_lancamento, created = TransacaoImportada.objects.get_or_create(
+        importacao=transacao.importacao,
+        tipo_lancamento=TipoLancamento.TARIFA,
+        defaults={
+            "data_movimento": transacao.data_movimento,
+            "data_ocorrencia": transacao.data_ocorrencia or transacao.data_movimento,
+            "descricao_original": f"Tarifa {transacao.descricao_original[:100]}",
+            "descricao_normalizada": f"TARIFA {normalize_text(transacao.descricao_original)[:100]}",
+            "valor": abs(tarifa_valor),
+            "tipo_movimento": TipoMovimento.DEBITO,
+            "status_vinculo_tarifa": StatusVinculoTarifa.NAO_APLICA,
+            "confianca_vinculo": ConfiancaVinculo.BAIXA,
+            "revisado_manual": False,
+        },
+    )
+
+    if not created and tarifa_lancamento.valor != abs(tarifa_valor):
+        tarifa_lancamento.valor = abs(tarifa_valor)
+        tarifa_lancamento.save(update_fields=["valor", "atualizado_em"])
+
+    transacao.lancamento_relacionado = tarifa_lancamento
+    transacao.status_vinculo_tarifa = StatusVinculoTarifa.ENCONTRADA
+    transacao.confianca_vinculo = ConfiancaVinculo.ALTA
+    transacao.save(
+        update_fields=["lancamento_relacionado", "status_vinculo_tarifa", "confianca_vinculo", "atualizado_em"]
+    )
+
+    TarifaVinculoAuditoria.objects.create(
+        lancamento_principal=transacao,
+        lancamento_tarifa=tarifa_lancamento,
+        usuario=usuario,
+        origem=OrigemAuditoriaTarifa.AUTOMATICA,
+        status_anterior=status_anterior,
+        status_novo=StatusVinculoTarifa.ENCONTRADA,
+    )
+
+
+def conciliar_tarifas_importacao(importacao: ImportacaoExtrato) -> dict[str, Any]:
+    """
+    Concilia tarifas para todos os lançamentos PRINCIPAL de uma importação.
+
+    Prioridade:
+    1. Tarifa PIX individual (mesma data ocorrência, mesmo valor)
+    2. Tarifa agrupada (mesma data ocorrência)
+    3. Não encontrada
+    """
+    from app.models import OrigemAuditoriaTarifa, TarifaVinculoAuditoria
+
+    principais = list(
+        importacao.transacoes.filter(
+            tipo_lancamento=TipoLancamento.PRINCIPAL,
+        ).select_related("lancamento_relacionado")
+    )
+
+    tarifas_individuais = list(
+        importacao.transacoes.filter(
+            tipo_lancamento=TipoLancamento.TARIFA,
+            lancamento_relacionado__isnull=True,
+        )
+    )
+
+    tarifas_agrupadas = list(
+        importacao.transacoes.filter(
+            tipo_lancamento=TipoLancamento.TARIFA_AGRUPADA,
+            lancamento_relacionado__isnull=True,
+        )
+    )
+
+    tarifas_usadas = set()
+
+    encontradas = 0
+    agrupadas = 0
+    nao_encontradas = 0
+
+    for principal in principais:
+        if principal.status_vinculo_tarifa != StatusVinculoTarifa.NAO_APLICA:
+            continue
+
+        desc_norm = (principal.descricao_normalizada or "").upper()
+        data_ocorrencia_principal = principal.data_ocorrencia or principal.data_movimento
+
+        if "PIX" not in desc_norm and "TED" not in desc_norm:
+            continue
+
+        tarifa_encontrada = None
+        status_novo = None
+        confianca = None
+
+        for tarifa in tarifas_individuais:
+            if tarifa.id in tarifas_usadas:
+                continue
+
+            desc_tarifa = (tarifa.descricao_normalizada or "").upper()
+            data_ocorrencia_tarifa = tarifa.data_ocorrencia or tarifa.data_movimento
+
+            is_tarifa_pix = "TARIFA PIX ENVIADO" in desc_tarifa or "TARIFA PIX RECEBIDO" in desc_tarifa
+            if not is_tarifa_pix:
+                continue
+
+            if data_ocorrencia_principal == data_ocorrencia_tarifa and tarifa.valor > 0:
+                tarifa_encontrada = tarifa
+                status_novo = StatusVinculoTarifa.ENCONTRADA
+                confianca = ConfiancaVinculo.ALTA
+                tarifas_usadas.add(tarifa.id)
+                break
+
+        if not tarifa_encontrada:
+            for tarifa in tarifas_agrupadas:
+                if tarifa.id in tarifas_usadas:
+                    continue
+
+                data_ocorrencia_tarifa = tarifa.data_ocorrencia or tarifa.data_movimento
+
+                if data_ocorrencia_principal == data_ocorrencia_tarifa:
+                    tarifa_encontrada = tarifa
+                    status_novo = StatusVinculoTarifa.AGRUPADA
+                    confianca = ConfiancaVinculo.MEDIA
+                    tarifas_usadas.add(tarifa.id)
+                    break
+
+        if tarifa_encontrada:
+            if status_novo == StatusVinculoTarifa.ENCONTRADA:
+                encontradas += 1
+            else:
+                agrupadas += 1
+
+            status_anterior = principal.status_vinculo_tarifa
+            principal.lancamento_relacionado = tarifa_encontrada
+            principal.status_vinculo_tarifa = status_novo
+            principal.confianca_vinculo = confianca
+            principal.save(
+                update_fields=["lancamento_relacionado", "status_vinculo_tarifa", "confianca_vinculo", "atualizado_em"]
+            )
+
+            TarifaVinculoAuditoria.objects.create(
+                lancamento_principal=principal,
+                lancamento_tarifa=tarifa_encontrada,
+                usuario="SISTEMA",
+                origem=OrigemAuditoriaTarifa.AUTOMATICA,
+                status_anterior=status_anterior,
+                status_novo=status_novo,
+            )
+        else:
+            nao_encontradas += 1
+
+    return {
+        "encontradas": encontradas,
+        "agrupadas": agrupadas,
+        "nao_encontradas": nao_encontradas,
+        "total_principais": len(principais),
+    }
+
+
+def aplicar_vinculo_tarifa_manual(
+    transacao_principal: TransacaoImportada,
+    transacao_tarifa: TransacaoImportada | None,
+    *,
+    usuario: str = "SISTEMA",
+) -> TransacaoImportada:
+    """
+    Vincula manualmente uma tarifa a um lançamento principal.
+    """
+    from app.models import OrigemAuditoriaTarifa, TarifaVinculoAuditoria
+
+    status_anterior = transacao_principal.status_vinculo_tarifa
+    tarifa_anterior_id = transacao_principal.lancamento_relacionado_id
+
+    if transacao_tarifa:
+        transacao_principal.lancamento_relacionado = transacao_tarifa
+        if transacao_tarifa.tipo_lancamento == TipoLancamento.TARIFA_AGRUPADA:
+            transacao_principal.status_vinculo_tarifa = StatusVinculoTarifa.AGRUPADA
+            transacao_principal.confianca_vinculo = ConfiancaVinculo.MEDIA
+        else:
+            transacao_principal.status_vinculo_tarifa = StatusVinculoTarifa.ENCONTRADA
+            transacao_principal.confianca_vinculo = ConfiancaVinculo.ALTA
+    else:
+        transacao_principal.lancamento_relacionado = None
+        transacao_principal.status_vinculo_tarifa = StatusVinculoTarifa.NAO_ENCONTRADA
+        transacao_principal.confianca_vinculo = ConfiancaVinculo.BAIXA
+
+    transacao_principal.revisado_manual = True
+    transacao_principal.save(
+        update_fields=[
+            "lancamento_relacionado",
+            "status_vinculo_tarifa",
+            "confianca_vinculo",
+            "revisado_manual",
+            "atualizado_em",
+        ]
+    )
+
+    TarifaVinculoAuditoria.objects.create(
+        lancamento_principal=transacao_principal,
+        lancamento_tarifa=transacao_tarifa,
+        usuario=usuario,
+        origem=OrigemAuditoriaTarifa.MANUAL,
+        status_anterior=status_anterior,
+        status_novo=transacao_principal.status_vinculo_tarifa,
+    )
+
+    return transacao_principal

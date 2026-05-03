@@ -318,9 +318,9 @@
             type="text"
             class="detalhe-dialog-hist detalhe-dialog-hist--edit"
             data-detalhe-hist
-            placeholder="Nome da regra"
+            placeholder="Descrição do lançamento"
             autocomplete="off"
-            title="Edite para personalizar o nome da regra"
+            title="Edite a descrição do lançamento"
           />
         </div>
         <button type="button" class="detalhe-dialog-close" data-detalhe-close aria-label="Fechar">
@@ -330,9 +330,9 @@
         </button>
       </div>
 
-      <!-- Corpo em 2 colunas -->
+      <!-- Corpo -->
       <div class="detalhe-dialog-body">
-        <div class="detalhe-dialog-col detalhe-dialog-col--left">
+        <div class="detalhe-dialog-col">
 
       <!-- Resumo do lançamento -->
       <div class="detalhe-resumo">
@@ -345,12 +345,20 @@
           <strong data-detalhe-doc></strong>
         </div>
         <div class="detalhe-resumo-item">
-          <span>Valor original</span>
-          <strong data-detalhe-valor></strong>
+          <span data-detalhe-label-valor-principal>Valor principal</span>
+          <strong data-detalhe-valor-principal></strong>
         </div>
         <div class="detalhe-resumo-item">
           <span>Natureza</span>
           <strong data-detalhe-natureza></strong>
+        </div>
+        <div class="detalhe-resumo-item">
+          <span data-detalhe-label-valor-original>Valor original</span>
+          <strong data-detalhe-valor-original></strong>
+        </div>
+        <div class="detalhe-resumo-item">
+          <span data-detalhe-label-tarifa>Tarifa</span>
+          <strong data-detalhe-tarifa></strong>
         </div>
       </div>
 
@@ -370,7 +378,7 @@
 
       <!-- Lista de componentes -->
       <div class="detalhe-componentes-wrap">
-        <p class="detalhe-componentes-title">Componentes</p>
+        <p class="detalhe-componentes-title" data-detalhe-componentes-title>Componentes</p>
         <ul class="detalhe-componentes-list" data-detalhe-list>
           <li class="detalhe-componentes-empty" data-detalhe-empty>Nenhum componente adicionado ainda.</li>
         </ul>
@@ -386,51 +394,12 @@
         <p class="detalhe-add-error" data-detalhe-add-error hidden></p>
       </form>
 
-        </div><!-- /.detalhe-dialog-col--left -->
-        <div class="detalhe-dialog-col detalhe-dialog-col--right">
-
-      <!-- Regras de conciliação -->
-      <div class="detalhe-regras-wrap">
-        <p class="detalhe-componentes-title">Regras de Conciliação</p>
-
-        <!-- Card: regra atualmente salva -->
-        <div class="detalhe-regra-salva" data-detalhe-regra-salva hidden>
-          <div class="detalhe-regra-salva-grid">
-            <div class="detalhe-regra-salva-item">
-              <span>Cód. Débito</span>
-              <strong data-detalhe-regra-cod-debito>—</strong>
-            </div>
-            <div class="detalhe-regra-salva-item">
-              <span>Cód. Crédito</span>
-              <strong data-detalhe-regra-cod-credito>—</strong>
-            </div>
-            <div class="detalhe-regra-salva-item">
-              <span>Cód. Histórico</span>
-              <strong data-detalhe-regra-cod-historico>—</strong>
-            </div>
-          </div>
-        </div>
-
-        <form class="detalhe-regras-form" data-detalhe-regras-form novalidate>
-          <div class="detalhe-regras-grid">
-            <label class="detalhe-regras-field">
-              <span>Cód. Débito</span>
-              <input type="text" name="codDebito" placeholder="Ex: 1.1.01" autocomplete="off" />
-            </label>
-            <label class="detalhe-regras-field">
-              <span>Cód. Crédito</span>
-              <input type="text" name="codCredito" placeholder="Ex: 2.1.01" autocomplete="off" />
-            </label>
-            <label class="detalhe-regras-field">
-              <span>Cód. Histórico</span>
-              <input type="text" name="codHistorico" placeholder="Ex: H001" autocomplete="off" />
-            </label>
-          </div>
+      <form class="detalhe-regras-form detalhe-regras-form--footer" data-detalhe-regras-form novalidate>
           <div class="detalhe-regras-footer">
             <p class="detalhe-regras-error" data-detalhe-regras-error hidden></p>
             <p class="detalhe-regras-ok" data-detalhe-regras-ok hidden>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>
-              Regra salva com sucesso!
+              Regras dos componentes salvas com sucesso!
             </p>
             <button type="submit" class="primary detalhe-regras-save-btn">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -438,15 +407,36 @@
                 <polyline points="17 21 17 13 7 13 7 21"/>
                 <polyline points="7 3 7 8 15 8"/>
               </svg>
-              Salvar regra
+              Salvar regras
             </button>
           </div>
         </form>
+
+        </div>
       </div>
 
-        </div><!-- /.detalhe-dialog-col--right -->
-      </div><!-- /.detalhe-dialog-body -->
+    </div>
+  </dialog>
 
+  <dialog class="detalhe-comprovante-viewer" data-detalhe-comprovante-viewer>
+    <div class="detalhe-comprovante-viewer-inner">
+      <div class="detalhe-comprovante-viewer-head">
+        <div>
+          <p class="detalhe-dialog-label">Prévia</p>
+          <h3 class="detalhe-comprovante-viewer-title">Comprovante</h3>
+        </div>
+        <div class="detalhe-comprovante-viewer-actions">
+          <a href="#" class="detalhe-comprovante-open" data-detalhe-comprovante-open target="_blank" rel="noopener noreferrer">Abrir em nova aba</a>
+          <button type="button" class="detalhe-comprovante-viewer-close" data-detalhe-comprovante-viewer-close aria-label="Fechar prévia do comprovante">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M18 6L6 18M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div class="detalhe-comprovante-viewer-body">
+        <iframe class="detalhe-comprovante-frame" data-detalhe-comprovante-frame title="Prévia do comprovante PDF"></iframe>
+      </div>
     </div>
   </dialog>
 

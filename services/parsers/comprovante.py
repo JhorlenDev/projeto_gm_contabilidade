@@ -43,10 +43,16 @@ class ItemComprovante:
 class ComprovanteResult:
     success: bool = False
     tipo: str = ""
+    pagina: int | None = None
     documento: str = ""          # normalizado (sem pontos/zeros à esquerda)
     data_pagamento: Optional[date] = None
     beneficiario: str = ""
+    valor_documento: Decimal = field(default_factory=lambda: Decimal("0"))
     valor_total: Decimal = field(default_factory=lambda: Decimal("0"))
+    tarifa_valor: Decimal = field(default_factory=lambda: Decimal("0"))
+    juros_valor: Decimal = field(default_factory=lambda: Decimal("0"))
+    multa_valor: Decimal = field(default_factory=lambda: Decimal("0"))
+    desconto_valor: Decimal = field(default_factory=lambda: Decimal("0"))
     itens: list[ItemComprovante] = field(default_factory=list)
     erros: list[str] = field(default_factory=list)
 
@@ -76,10 +82,11 @@ def parse_comprovante_pdf(uploaded_file) -> list[ComprovanteResult]:
     results = []
 
     # Tenta página a página (BB exporta cada comprovante em 1-2 páginas)
-    for page in reader.pages:
+    for page_number, page in enumerate(reader.pages, start=1):
         text = page.extract_text() or ""
         r = _parse_single(text)
         if r.success:
+            r.pagina = page_number
             results.append(r)
 
     # Se não encontrou nada página a página, tenta o documento inteiro
@@ -87,6 +94,7 @@ def parse_comprovante_pdf(uploaded_file) -> list[ComprovanteResult]:
         full = "\n".join(page.extract_text() or "" for page in reader.pages)
         r = _parse_single(full)
         if r.success:
+            r.pagina = 1 if len(reader.pages) == 1 else None
             results.append(r)
 
     return results or [ComprovanteResult(success=False, erros=["Formato de comprovante não reconhecido."])]
@@ -160,17 +168,34 @@ def _parse_bb_boleto(text: str) -> ComprovanteResult:
 
     valor_doc = _brl(_find(r"VALOR DO DOCUMENTO\s+([\d.,]+)", text))
     valor_cobrado = _brl(_find(r"VALOR COBRADO\s+([\d.,]+)", text))
+    juros = _brl(_find(r"JUROS\s+([\d.,]+)", text))
+    multa = _brl(_find(r"MULTA\s+([\d.,]+)", text))
+    desconto = _brl(_find(r"DESCONTO\s+([\d.,]+)", text))
 
+    r.valor_documento = valor_doc
     r.valor_total = valor_cobrado if valor_cobrado > 0 else valor_doc
 
     # Só tem itens extras quando os valores diferem (desconto ou multa/juros)
     if valor_doc > 0 and valor_cobrado > 0 and valor_doc != valor_cobrado:
         r.itens.append(ItemComprovante(descricao="Principal", valor=valor_doc))
-        diff = valor_cobrado - valor_doc
-        if diff > 0:
-            r.itens.append(ItemComprovante(descricao="Juros/Multa", valor=diff))
-        else:
-            r.itens.append(ItemComprovante(descricao="Desconto", valor=diff))
+        if multa > 0:
+            r.multa_valor = multa
+            r.itens.append(ItemComprovante(descricao="Multa", valor=multa))
+        if juros > 0:
+            r.juros_valor = juros
+            r.itens.append(ItemComprovante(descricao="Juros", valor=juros))
+        if desconto > 0:
+            r.desconto_valor = desconto
+            r.itens.append(ItemComprovante(descricao="Desconto", valor=-desconto))
+
+        if not any([multa > 0, juros > 0, desconto > 0]):
+            diff = valor_cobrado - valor_doc
+            if diff > 0:
+                r.juros_valor = diff
+                r.itens.append(ItemComprovante(descricao="Juros", valor=diff))
+            else:
+                r.desconto_valor = abs(diff)
+                r.itens.append(ItemComprovante(descricao="Desconto", valor=diff))
     else:
         r.itens.append(ItemComprovante(descricao="Principal", valor=r.valor_total))
 
@@ -196,11 +221,11 @@ def _parse_bb_pix(text: str) -> ComprovanteResult:
 
     r.beneficiario = _find(r"PAGO PARA[:\s]+(.+?)[\n\r]", text)
 
+    r.valor_documento = valor
     r.valor_total = valor + tarifa
+    r.tarifa_valor = tarifa
 
     r.itens.append(ItemComprovante(descricao="Principal", valor=valor))
-    if tarifa > 0:
-        r.itens.append(ItemComprovante(descricao="Tarifa PIX", valor=tarifa))
 
     r.success = valor > 0 and bool(r.documento)
     return r
@@ -218,6 +243,7 @@ def _parse_bb_ted(text: str) -> ComprovanteResult:
     r.documento = _clean_doc(doc_raw)
 
     valor = _brl(_find(r"VALOR(?:\s+TOTAL)?[:\s]+([\d.,]+)", text))
+    tarifa = _brl(_find(r"TARIFA[:\s]+([\d.,]+)", text))
 
     data_str = _find(r"DATA DA TRANSFERENCIA\s+(\d{2}/\d{2}/\d{4})", text)
     if not data_str:
@@ -228,7 +254,9 @@ def _parse_bb_ted(text: str) -> ComprovanteResult:
     if not r.beneficiario:
         r.beneficiario = _find(r"CLIENTE:\s*(.+?)[\n\r]", text)
 
-    r.valor_total = valor
+    r.valor_documento = valor
+    r.valor_total = valor + tarifa
+    r.tarifa_valor = tarifa
     r.itens.append(ItemComprovante(descricao="Principal", valor=valor))
 
     r.success = valor > 0 and bool(r.documento)
@@ -252,6 +280,7 @@ def _parse_bb_convenio(text: str) -> ComprovanteResult:
 
     r.beneficiario = _find(r"Convenio\s+(.+?)[\n\r]", text)
 
+    r.valor_documento = valor
     r.valor_total = valor
     r.itens.append(ItemComprovante(descricao="Principal", valor=valor))
 
@@ -286,9 +315,13 @@ def _parse_bradesco_boleto(text: str) -> ComprovanteResult:
     abatimento = _brl(_find(r"Abatimento[:\s]+R\$\s*([\d.,]+)", text))
 
     r.valor_total = valor_total
+    r.juros_valor = juros
+    r.multa_valor = multa
+    r.desconto_valor = desconto + abatimento
 
     # Principal = valor pago - juros - multa + desconto + abatimento
     principal = valor_total - juros - multa + desconto + abatimento
+    r.valor_documento = principal
 
     r.itens.append(ItemComprovante(descricao="Principal", valor=principal))
     if multa > 0:
@@ -349,6 +382,7 @@ def _parse_darf(text: str) -> ComprovanteResult:
         text, re.IGNORECASE,
     )
     r.valor_total = _brl(totais_m.group(1)) if totais_m else total
+    r.valor_documento = total
 
     r.success = bool(r.itens) and r.valor_total > 0
     return r
