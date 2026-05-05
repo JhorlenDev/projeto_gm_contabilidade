@@ -7,7 +7,7 @@ from pathlib import Path
 from django.utils import timezone
 from rest_framework import serializers
 
-from services.conciliador import normalize_text
+from services.conciliador import normalizar_descricao_transacao
 
 from .models import (
     Banco,
@@ -356,7 +356,7 @@ class CertificadoDigitalClienteSerializer(serializers.ModelSerializer):
             instance.arquivo.storage.delete(old_name)
 
         return instance
-
+        
     def get_tamanho_formatado(self, obj):
         size = int(obj.tamanho_bytes or 0)
         if size < 1024:
@@ -598,11 +598,13 @@ class TransacaoImportadaSerializer(serializers.ModelSerializer):
     data_lancamento_extrato = serializers.DateField(source="data_movimento", read_only=True)
     descricao = serializers.CharField(source="descricao_original", read_only=True)
     componentes = LancamentoComponenteSerializer(many=True, required=False)
+    chave_descricao = serializers.SerializerMethodField()
     tarifa_vinculada = serializers.SerializerMethodField()
     badge_tarifa = serializers.SerializerMethodField()
     composicao = serializers.SerializerMethodField()
     is_boleto = serializers.SerializerMethodField()
     is_pix_ted = serializers.SerializerMethodField()
+    mostrar_botao_tarifa = serializers.SerializerMethodField()
 
     class Meta:
         model = TransacaoImportada
@@ -617,6 +619,7 @@ class TransacaoImportadaSerializer(serializers.ModelSerializer):
             "descricao",
             "descricao_original",
             "descricao_normalizada",
+            "chave_descricao",
             "valor",
             "valor_formatado",
             "tipo_movimento",
@@ -658,6 +661,7 @@ class TransacaoImportadaSerializer(serializers.ModelSerializer):
             "importacao_status",
             "linha_origem",
             "data_lancamento_extrato",
+            "chave_descricao",
             "tarifa_vinculada",
             "badge_tarifa",
             "composicao",
@@ -713,11 +717,14 @@ class TransacaoImportadaSerializer(serializers.ModelSerializer):
             "tipo_lancamento": obj.lancamento_relacionado.tipo_lancamento,
         }
 
+    def get_chave_descricao(self, obj):
+        return normalizar_descricao_transacao(obj.descricao_original)
+
     def get_badge_tarifa(self, obj):
         if obj.tipo_lancamento != TipoLancamento.PRINCIPAL:
             return None
 
-        desc_norm = (obj.descricao_normalizada or "").upper()
+        desc_norm = self.get_chave_descricao(obj)
         is_pix_ted = "PIX" in desc_norm or "TED" in desc_norm
 
         status = obj.status_vinculo_tarifa
@@ -766,30 +773,20 @@ class TransacaoImportadaSerializer(serializers.ModelSerializer):
         }
 
     def get_is_boleto(self, obj):
-        desc_norm = (obj.descricao_normalizada or "").upper()
+        desc_norm = self.get_chave_descricao(obj)
         return any(kw in desc_norm for kw in ["BOLETO", "PAGAMENTO", "TITULO", "COBRANCA"])
 
     def get_is_pix_ted(self, obj):
         if obj.tipo_lancamento == TipoLancamento.PRINCIPAL:
-            desc_norm = (obj.descricao_normalizada or "").upper()
+            desc_norm = self.get_chave_descricao(obj)
             return "PIX" in desc_norm or "TED" in desc_norm
         return False
 
     def get_mostrar_botao_tarifa(self, obj):
-        if obj.tipo_lancamento != TipoLancamento.PRINCIPAL:
-            return False
-        desc_norm = (obj.descricao_normalizada or "").upper()
-        is_pix_ted = "PIX" in desc_norm or "TED" in desc_norm
-        if is_pix_ted:
-            return False
-        return obj.status_vinculo_tarifa in [
-            StatusVinculoTarifa.ENCONTRADA,
-            StatusVinculoTarifa.AGRUPADA,
-            StatusVinculoTarifa.NAO_ENCONTRADA,
-        ]
+        return False
 
     def validate_descricao_normalizada(self, value):
-        return normalize_text(value)
+        return normalizar_descricao_transacao(value)
 
     def validate_categoria(self, value):
         return _strip_text(value)

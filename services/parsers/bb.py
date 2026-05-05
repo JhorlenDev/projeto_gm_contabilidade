@@ -130,15 +130,13 @@ class BancoBrasilExtratoParser:
 
             rest = m.group(5).strip()
 
-            complemento = ""
-            if i + 1 < len(lines):
+            complementos = []
+            while i + 1 < len(lines):
                 next_line = lines[i + 1]
-                if re.match(r"^\d{2}/\d{2}\s+\d{2}:\d{2}", next_line):
-                    complemento = next_line
-                    i += 1
-                elif re.match(r"^\d{11,14}\s+", next_line) or re.match(r"^[A-Z]{2,}", next_line):
-                    complemento = next_line
-                    i += 1
+                if _SKIP_RE.search(next_line) or self._DATE_RE.match(next_line):
+                    break
+                complementos.append(next_line)
+                i += 1
 
             dc_m = self._VALUE_DC_RE.search(rest)
             if not dc_m:
@@ -168,10 +166,12 @@ class BancoBrasilExtratoParser:
                     before_val = before_val[:doc_m.start()].strip()
 
             desc = before_val
-            if complemento:
+            for complemento in complementos:
                 nome_m = re.search(r"\d{2}:\d{2}\s+\d+\s+(.+)", complemento)
                 if nome_m:
                     desc = f"{desc} — {nome_m.group(1).strip()}"
+                    continue
+                desc = f"{desc} — {complemento.strip()}"
 
             line_idx += 1
             lancamentos.append(LancamentoExtrato(
@@ -183,7 +183,7 @@ class BancoBrasilExtratoParser:
                 valor=valor,
                 natureza_inferida=natureza,
                 saldo=None,
-                linha_original=line,
+                linha_original="\n".join([line, *complementos]),
             ))
 
             i += 1

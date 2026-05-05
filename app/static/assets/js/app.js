@@ -1827,11 +1827,13 @@
         .map((transaction) => {
           const badge = transactionStatusBadge(transaction);
           const movementBadge = "is-neutro";
+          const descriptionCell = renderLancamentoDescriptionCell(transaction);
+          const displayTitle = getLancamentoDisplayTitle(transaction);
           return `
             <tr data-conciliador-transaction-id="${escapeHtml(transaction.id)}">
               <td>${escapeHtml(formatDateBR(transaction.data_movimento))}</td>
-              <td>${escapeHtml(transaction.descricao_original || "")}</td>
-              <td>${escapeHtml(transaction.descricao_normalizada || "")}</td>
+              <td class="extrato-td-hist">${descriptionCell}</td>
+              <td>${escapeHtml(displayTitle)}</td>
               <td>${escapeHtml(transaction.valor_formatado || formatCurrencyBRL(transaction.valor))}</td>
               <td><span class="conciliador-badge ${movementBadge}">${escapeHtml(movementLabel(transaction.tipo_movimento))}</span></td>
               <td>
@@ -4985,6 +4987,514 @@
       return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(isFinite(num) ? num : 0);
     }
 
+    const KNOWN_LANCAMENTO_PATTERNS = [
+      ["TARIFA PIX ENVIADO", [/\bTARIFA\b.*\bPIX\b.*\bENVIAD[AO]\b/]],
+      ["TARIFA PIX RECEBIDO", [/\bTARIFA\b.*\bPIX\b.*\bRECEBID[AO]\b/]],
+      ["TARIFA PIX", [/\bTARIFA\b.*\bPIX\b/]],
+      ["PIX RECEBIDO QR CODE", [/\bPIX\b.*\bRECEBID[AO]\b.*\bQR\s*CODE\b/]],
+      ["PIX RECEBIDO", [/\bPIX\b.*\bRECEBID[AO]\b/]],
+      ["PIX ENVIADO", [/\bPIX\b.*\bENVIAD[AO]\b/]],
+      ["PIX DEVOLVIDO", [/\bPIX\b.*\bDEVOLVID[AO]\b/]],
+      ["TED RECEBIDA", [/\bTED\b.*\bRECEBID[AO]\b/]],
+      ["TED ENVIADA", [/\bTED\b.*\bENVIAD[AO]\b/]],
+      ["DOC RECEBIDO", [/\bDOC\b.*\bRECEBID[AO]\b/]],
+      ["DOC ENVIADO", [/\bDOC\b.*\bENVIAD[AO]\b/]],
+      ["TRANSFERENCIA RECEBIDA", [/\bTRANSF(?:ERENCIA)?\b.*\bRECEBID[AO]\b/]],
+      ["TRANSFERENCIA ENVIADA", [/\bTRANSF(?:ERENCIA)?\b.*\bENVIAD[AO]\b/]],
+      ["PAGAMENTO BOLETO", [/\bPAG(?:AMENTO|TO)\b.*\bBOLETO\b/, /\bBOLETO\b.*\bPAG(?:AMENTO|TO)\b/]],
+      ["PAGAMENTO TITULO", [/\bPAG(?:AMENTO|TO)\b.*\bTITULO\b/]],
+      ["DEBITO AUTOMATICO", [/\bDEBITO\b.*\bAUTOMATICO\b/]],
+      ["COMPRA CARTAO", [/\bCOMPRA\b.*\bCARTAO\b/]],
+      ["SAQUE", [/\bSAQUE\b/]],
+      ["DEPOSITO", [/\bDEPOSITO\b/]],
+      ["ESTORNO", [/\bESTORNO\b/]],
+      ["JUROS", [/\bJUROS\b/]],
+      ["IOF", [/\bIOF\b/]],
+      ["RENDIMENTO", [/\bRENDIMENTO\b/]],
+      ["TARIFA BANCARIA", [/\bTARIFA\b.*\bBANCARIA\b/]],
+      ["MANUTENCAO CONTA", [/\bMANUTENCAO\b.*\bCONTA\b/]],
+    ];
+
+    function stripTrailingReferenceTokens(value) {
+      let tokens = String(value || "").split(" ").filter(Boolean);
+
+      while (tokens.length >= 3 && tokens.slice(-3).every((token) => /^\d+$/.test(token))) {
+        const lengths = tokens.slice(-3).map((token) => token.length).join(",");
+        if (!["2,2,4", "2,2,2"].includes(lengths)) {
+          break;
+        }
+        tokens = tokens.slice(0, -3);
+      }
+
+      while (tokens.length) {
+        const token = tokens[tokens.length - 1];
+        if (/^\d{4,}$/.test(token) || (/^[A-Z0-9]*\d[A-Z0-9]*$/.test(token) && token.length >= 4)) {
+          tokens = tokens.slice(0, -1);
+          continue;
+        }
+        break;
+      }
+
+      return tokens.join(" ");
+    }
+
+    function normalizeDescricaoLancamento(value) {
+      let text = String(value || "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[-–—_/\\|.:]+/g, " ")
+        .replace(/[^\w\s]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toUpperCase();
+
+      text = text
+        .replace(/\bQRCODE\b/g, "QR CODE")
+        .replace(/\bPAGTO\b/g, "PAGAMENTO")
+        .replace(/\bTRANSF\b/g, "TRANSFERENCIA")
+        .replace(/\bMANUTENCAO\s+DE\s+CONTA\b/g, "MANUTENCAO CONTA")
+        .replace(/\s+/g, " ")
+        .trim();
+
+      for (const [canonical, patterns] of KNOWN_LANCAMENTO_PATTERNS) {
+        if (patterns.some((pattern) => pattern.test(text))) {
+          return canonical;
+        }
+      }
+
+      return stripTrailingReferenceTokens(text);
+    }
+
+    function getLancamentoDisplayTitle(record) {
+      return String(
+        record?.chave_descricao
+        || record?.descricao_normalizada
+        || normalizeDescricaoLancamento(record?.historico || record?.descricao_original || record?.descricao || "")
+      ).trim();
+    }
+
+    function getLancamentoDisplaySubtitle(record) {
+      const original = String(record?.historico || record?.descricao_original || record?.descricao || "").trim();
+      if (!original) return "";
+      const title = getLancamentoDisplayTitle(record);
+      return normalizeSearchTerm(original) === normalizeSearchTerm(title) ? "" : original;
+    }
+
+    function renderLancamentoDescriptionCell(record, indicators = "") {
+      const title = escapeHtml(getLancamentoDisplayTitle(record));
+      const subtitle = escapeHtml(getLancamentoDisplaySubtitle(record));
+      return `
+        <div class="extrato-hist-wrap">
+          <span class="extrato-hist-text">
+            <span class="extrato-hist-title">${title}</span>
+            ${subtitle ? `<span class="extrato-hist-subtitle">${subtitle}</span>` : ""}
+          </span>
+          ${indicators ? `<span class="extrato-hist-indicators">${indicators}</span>` : ""}
+        </div>
+      `;
+    }
+
+    function parseDateLike(value) {
+      if (!value) return null;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(String(value))) return String(value);
+      const match = String(value).match(/(\d{2})\/(\d{2})\/(\d{2,4})/);
+      if (!match) return null;
+      const [, day, month, yearRaw] = match;
+      const year = yearRaw.length === 2 ? `20${yearRaw}` : yearRaw;
+      return `${year}-${month}-${day}`;
+    }
+
+    function extractOccurrenceDateFromText(value, fallbackDate = null) {
+      const text = String(value || "");
+      const patterns = [
+        /OCORR(?:E|Ê)NCIA\s*(\d{2}\/\d{2}\/\d{2,4})/i,
+        /TAR\.?\s+AGRUPADAS\s*[-:]?\s*OCORR(?:E|Ê)NCIA\s*(\d{2}\/\d{2}\/\d{2,4})/i,
+      ];
+      for (const pattern of patterns) {
+        const match = text.match(pattern);
+        if (match?.[1]) {
+          return parseDateLike(match[1]);
+        }
+      }
+      return fallbackDate || null;
+    }
+
+    function classifyLancamentoTipo(record) {
+      const descricao = normalizeDescricaoLancamento(record?.historico || record?.descricao_original || record?.descricao || "");
+      const fallbackDate = parseDateLike(record?.data || record?.data_movimento || record?.data_lancamento_extrato);
+      if (descricao.includes("DEBITO SERVICO COBRANCA") || descricao.includes("TAR AGRUPADAS") || descricao.includes("TARIFAS AGRUPADAS")) {
+        return {
+          tipo_lancamento: "TARIFA_AGRUPADA",
+          data_ocorrencia: extractOccurrenceDateFromText(record?.historico || record?.descricao_original || "", fallbackDate),
+        };
+      }
+
+      if (
+        descricao.includes("TARIFA")
+        || descricao.includes("PACOTE SERVICOS")
+        || descricao.includes("PACOTE DE SERVICOS")
+        || descricao.includes("MANUTENCAO PJ")
+        || descricao.includes("SERVICO COBRANCA")
+      ) {
+        return {
+          tipo_lancamento: "TARIFA",
+          data_ocorrencia: extractOccurrenceDateFromText(record?.historico || record?.descricao_original || "", fallbackDate),
+        };
+      }
+
+      return {
+        tipo_lancamento: "PRINCIPAL",
+        data_ocorrencia: null,
+      };
+    }
+
+    function normalizeLancamentoRecord(record) {
+      const historico = String(record?.historico || record?.descricao_original || "").trim();
+      const valorOriginalBanco = parseFloat(record?.valor_original_do_banco ?? record?.valor ?? 0);
+      const metadata = classifyLancamentoTipo(record);
+      return {
+        ...record,
+        linha: record?.linha ?? record?.linha_origem ?? null,
+        linha_origem: record?.linha_origem ?? record?.linha ?? null,
+        data: record?.data || record?.data_movimento || null,
+        data_lancamento_extrato: record?.data_lancamento_extrato || record?.data || record?.data_movimento || null,
+        data_ocorrencia: record?.data_ocorrencia || metadata.data_ocorrencia || null,
+        historico,
+        descricao: historico,
+        descricao_original: historico,
+        chave_descricao: String(record?.chave_descricao || normalizeDescricaoLancamento(historico)).trim(),
+        descricao_normalizada: String(record?.chave_descricao || record?.descricao_normalizada || normalizeDescricaoLancamento(historico)).trim(),
+        documento: String(record?.documento || record?.dados_brutos?.DOCUMENTO || record?.dados_brutos?.documento || "").trim(),
+        natureza: String(record?.natureza || record?.tipo_movimento || record?.natureza_inferida || "INDEFINIDA").toUpperCase(),
+        valor: Number.isFinite(valorOriginalBanco) ? valorOriginalBanco : 0,
+        valor_original_do_banco: Number.isFinite(valorOriginalBanco) ? valorOriginalBanco : 0,
+        tipo_lancamento: String(record?.tipo_lancamento || metadata.tipo_lancamento || "PRINCIPAL").toUpperCase(),
+        lancamento_relacionado_key: record?.lancamento_relacionado_key || null,
+        status_vinculo_tarifa: String(record?.status_vinculo_tarifa || "NAO_APLICA").toUpperCase(),
+        confianca_vinculo: String(record?.confianca_vinculo || "BAIXA").toUpperCase(),
+        tarifa_esperada_valor: parseFloat(record?.tarifa_esperada_valor || 0) || 0,
+        comprovante_tipo: String(record?.comprovante_tipo || "").toUpperCase(),
+      };
+    }
+
+    function normalizeLancamentos(records) {
+      return (Array.isArray(records) ? records : []).map(normalizeLancamentoRecord);
+    }
+
+    function getLancamentoDescricaoNormalizada(l) {
+      return String(l?.chave_descricao || l?.descricao_normalizada || normalizeDescricaoLancamento(l?.historico || "")).trim();
+    }
+
+    function getNormalizedComponentDescription(component) {
+      return normalizeDescricaoLancamento(component?.descricao || "");
+    }
+
+    function isTarifaComponent(component) {
+      return inferTipoComponente(component) === "TARIFA";
+    }
+
+    function getComponentExportType(component) {
+      const tipo = inferTipoComponente(component);
+      return tipo || "OUTROS";
+    }
+
+    function normalizeComprovanteRecord(record) {
+      return {
+        ...record,
+        tipo: String(record?.tipo || "").toLowerCase(),
+        documento: String(record?.documento || "").trim(),
+        data_pagamento: record?.data_pagamento || null,
+        valor_documento: parseFloat(record?.valor_documento || 0) || 0,
+        valor_total: parseFloat(record?.valor_total || 0) || 0,
+        tarifa_valor: parseFloat(record?.tarifa_valor || 0) || 0,
+        juros_valor: parseFloat(record?.juros_valor || 0) || 0,
+        multa_valor: parseFloat(record?.multa_valor || 0) || 0,
+        desconto_valor: parseFloat(record?.desconto_valor || 0) || 0,
+        itens: Array.isArray(record?.itens) ? record.itens : [],
+      };
+    }
+
+    function getComprovanteOperationKind(comp) {
+      const tipo = String(comp?.tipo || "").toLowerCase();
+      if (tipo.includes("pix")) return "PIX";
+      if (tipo.includes("ted")) return "TED";
+      if (tipo.includes("boleto")) return "BOLETO";
+      if (tipo.includes("convenio") || tipo.includes("darf")) return "PAGAMENTO";
+      return "OUTRO";
+    }
+
+    function hasExpectedTarifa(comp) {
+      return (parseFloat(comp?.tarifa_valor || 0) || 0) > 0;
+    }
+
+    function hasDetalhamentoComprovante(comp) {
+      const itens = Array.isArray(comp?.itens) ? comp.itens : [];
+      return itens.some((item) => {
+        const descricao = getNormalizedComponentDescription(item);
+        return descricao && descricao !== "PRINCIPAL";
+      });
+    }
+
+    function shouldUseComprovanteComposition(comp) {
+      return ["BOLETO", "PAGAMENTO"].includes(getComprovanteOperationKind(comp)) && hasDetalhamentoComprovante(comp);
+    }
+
+    function getComprovanteDisplayBadges(comp) {
+      const labels = [];
+      if (!comp) return labels;
+      if (hasExpectedTarifa(comp)) labels.push("+ tarifa");
+      if (parseFloat(comp?.juros_valor || 0) > 0) labels.push("juros");
+      if (parseFloat(comp?.multa_valor || 0) > 0) labels.push("multa");
+      if (parseFloat(comp?.desconto_valor || 0) > 0) labels.push("desconto");
+      return labels;
+    }
+
+    function getTarifaTypeHints(comp, lancamento) {
+      const hints = [];
+      const op = getComprovanteOperationKind(comp);
+      const descricao = getLancamentoDescricaoNormalizada(lancamento);
+      if (op === "PIX") {
+        hints.push("PIX");
+        if (descricao.includes("RECEB")) hints.push("RECEB");
+        if (descricao.includes("ENVI")) hints.push("ENVI");
+      }
+      if (op === "TED") {
+        hints.push("TED", "TRANSFER");
+      }
+      return hints;
+    }
+
+    function getTarifaOccurrenceDate(lancamento) {
+      return lancamento?.data_ocorrencia || lancamento?.data_lancamento_extrato || lancamento?.data || null;
+    }
+
+    function matchesTarifaHint(tarifaLaunch, hints) {
+      if (!hints.length) return true;
+      const descricao = getLancamentoDescricaoNormalizada(tarifaLaunch);
+      return hints.some((hint) => descricao.includes(hint));
+    }
+
+    function getTarifaStatusMeta(status) {
+      const lookup = {
+        ENCONTRADA: { label: "tarifa vinculada", icon: "✔", tone: "ok" },
+        AGRUPADA: { label: "tarifa agrupada", icon: "⚠", tone: "warn" },
+        NAO_ENCONTRADA: { label: "tarifa pendente", icon: "❌", tone: "danger" },
+        NAO_APLICA: { label: "+ tarifa", icon: "+", tone: "info" },
+      };
+      return lookup[status] || lookup.NAO_APLICA;
+    }
+
+    function recomputeTarifaMatches() {
+      state.lancamentos.forEach((lancamento) => {
+        lancamento.lancamento_relacionado_key = null;
+        lancamento.status_vinculo_tarifa = "NAO_APLICA";
+        lancamento.confianca_vinculo = "BAIXA";
+        lancamento.tarifa_esperada_valor = 0;
+      });
+
+      if (!state.lancamentos.length || !state.comprovantes.length) return;
+
+      state.lancamentos.forEach((lancamento) => {
+        if (lancamento.tipo_lancamento !== "PRINCIPAL") {
+          return;
+        }
+
+        const comprovante = getMatchedComprovante(lancamento);
+        if (!comprovante || !hasExpectedTarifa(comprovante) || !["PIX", "TED"].includes(getComprovanteOperationKind(comprovante))) {
+          return;
+        }
+
+        lancamento.tarifa_esperada_valor = parseFloat(comprovante.tarifa_valor || 0) || 0;
+
+        const occurrenceDate = comprovante.data_pagamento || lancamento.data_lancamento_extrato || lancamento.data;
+        const hints = getTarifaTypeHints(comprovante, lancamento);
+        const candidates = state.lancamentos.filter((candidate) => candidate !== lancamento);
+
+        const individual = candidates.find((candidate) => (
+          candidate.tipo_lancamento === "TARIFA"
+          && Math.abs((parseFloat((candidate.valor_original_do_banco ?? candidate.valor ?? 0))) - lancamento.tarifa_esperada_valor) <= 0.01
+          && getTarifaOccurrenceDate(candidate) === occurrenceDate
+          && matchesTarifaHint(candidate, hints)
+        ));
+
+        if (individual) {
+          lancamento.lancamento_relacionado_key = lancamentoKey(individual);
+          lancamento.status_vinculo_tarifa = "ENCONTRADA";
+          lancamento.confianca_vinculo = "ALTA";
+          return;
+        }
+
+        const grouped = candidates.find((candidate) => (
+          candidate.tipo_lancamento === "TARIFA_AGRUPADA"
+          && getTarifaOccurrenceDate(candidate) === occurrenceDate
+        ));
+
+        if (grouped) {
+          lancamento.lancamento_relacionado_key = lancamentoKey(grouped);
+          lancamento.status_vinculo_tarifa = "AGRUPADA";
+          lancamento.confianca_vinculo = "MEDIA";
+          return;
+        }
+
+        lancamento.status_vinculo_tarifa = "NAO_ENCONTRADA";
+        lancamento.confianca_vinculo = "BAIXA";
+      });
+    }
+
+    const MATCH_STOPWORDS = new Set([
+      "BB", "PIX", "TED", "DOC", "TARIFA", "PAGAMENTO", "TRANSFERENCIA",
+      "RECEBIDO", "ENVIADO", "BOLETO", "CONVENIO", "COMPROVANTE", "PARA", "DE", "DO", "DA",
+      "E", "QR", "CODE", "BANCO", "RECEITA", "FEDERAL",
+    ]);
+
+    function buildMatchTokens(value) {
+      return new Set(
+        normalizeDescricaoLancamento(value)
+          .split(" ")
+          .filter((token) => token && token.length >= 3 && !MATCH_STOPWORDS.has(token))
+      );
+    }
+
+    function documentsRelated(docA, docB) {
+      const a = normalizeDoc(docA);
+      const b = normalizeDoc(docB);
+      if (!a || !b) return false;
+      if (a === b) return true;
+
+      const shorter = a.length <= b.length ? a : b;
+      const longer = a.length > b.length ? a : b;
+      if (shorter.length < 5) return false;
+
+      return longer.startsWith(shorter) || longer.endsWith(shorter) || longer.includes(shorter);
+    }
+
+    function valuesClose(valueA, valueB, tolerance = 0.01) {
+      return Math.abs((parseFloat(valueA) || 0) - (parseFloat(valueB) || 0)) <= tolerance;
+    }
+
+    function getTypeHintScore(lancamento, comprovante) {
+      const descricao = getLancamentoDescricaoNormalizada(lancamento);
+      const tipo = String(comprovante?.tipo || "").toUpperCase();
+      if (!descricao || !tipo) return 0;
+      if (tipo.includes("PIX") && descricao.includes("PIX")) return 8;
+      if (tipo.includes("BOLETO") && (descricao.includes("BOLETO") || descricao.includes("TITULO"))) return 8;
+      if ((tipo.includes("TED") || tipo.includes("TRANSFER")) && (descricao.includes("TED") || descricao.includes("TRANSFER"))) return 8;
+      if (tipo.includes("CONVENIO") && (descricao.includes("CONVENIO") || descricao.includes("PAGAMENTO"))) return 8;
+      if (tipo.includes("DARF") && (descricao.includes("DARF") || descricao.includes("RECEITA"))) return 8;
+      return 0;
+    }
+
+    function scoreComprovanteForLancamento(lancamento, comprovante) {
+      const lancDoc = normalizeDoc(lancamento?.documento);
+      const compDoc = normalizeDoc(comprovante?.documento);
+      const sameDoc = documentsRelated(lancDoc, compDoc);
+
+      if (lancDoc && compDoc && !sameDoc) {
+        return Number.NEGATIVE_INFINITY;
+      }
+
+      const sameValue = valuesClose(lancamento?.valor_original_do_banco ?? lancamento?.valor, comprovante?.valor_total);
+      const sameDate = Boolean(lancamento?.data && comprovante?.data_pagamento && String(lancamento.data) === String(comprovante.data_pagamento));
+
+      const lancTokens = buildMatchTokens(lancamento?.historico);
+      const beneficiarioTokens = buildMatchTokens(comprovante?.beneficiario);
+      let overlap = 0;
+      beneficiarioTokens.forEach((token) => {
+        if (lancTokens.has(token)) overlap += 1;
+      });
+
+      if (!sameDoc && !sameValue) {
+        return Number.NEGATIVE_INFINITY;
+      }
+
+      if (!sameDoc && !sameDate && overlap === 0) {
+        return Number.NEGATIVE_INFINITY;
+      }
+
+      let score = 0;
+      if (sameDoc) score += lancDoc === compDoc ? 120 : 100;
+      if (sameValue) score += 35;
+      if (sameDate) score += 20;
+      if (overlap >= 2) score += 22;
+      else if (overlap === 1) score += 12;
+      score += getTypeHintScore(lancamento, comprovante);
+      return score;
+    }
+
+    function recomputeComprovanteMatches() {
+      state.comprovanteMatches = {};
+      if (!state.lancamentos.length || !state.comprovantes.length) return;
+
+      const candidates = [];
+      state.lancamentos.forEach((lancamento) => {
+        state.comprovantes.forEach((comprovante, compIndex) => {
+          const score = scoreComprovanteForLancamento(lancamento, comprovante);
+          if (score >= 48) {
+            candidates.push({
+              lancamentoKey: lancamentoKey(lancamento),
+              compIndex,
+              score,
+            });
+          }
+        });
+      });
+
+      candidates.sort((a, b) => b.score - a.score);
+
+      const usedLancamentos = new Set();
+      const usedComprovantes = new Set();
+      candidates.forEach((candidate) => {
+        if (usedLancamentos.has(candidate.lancamentoKey) || usedComprovantes.has(candidate.compIndex)) {
+          return;
+        }
+        state.comprovanteMatches[candidate.lancamentoKey] = state.comprovantes[candidate.compIndex];
+        usedLancamentos.add(candidate.lancamentoKey);
+        usedComprovantes.add(candidate.compIndex);
+      });
+    }
+
+    function getMatchedComprovante(lancamento) {
+      return state.comprovanteMatches[lancamentoKey(lancamento)] || null;
+    }
+
+    function getResolvedComponentes(l) {
+      const key = lancamentoKey(l);
+      if (state.componentes[key]?.length) {
+        return state.componentes[key].map(normalizeComponente).filter((item) => item.valor !== 0);
+      }
+      const comp = getMatchedComprovante(l);
+      return buildInitialComponentes(l, comp).map(normalizeComponente).filter((item) => item.valor !== 0);
+    }
+
+    function getLancamentoValores(l, componentes = null) {
+      const comps = componentes || getResolvedComponentes(l);
+      const valorOriginalBanco = parseFloat((l?.valor_original_do_banco ?? l?.valor ?? 0)) || 0;
+      const valorPrincipal = comps
+        .filter((item) => inferTipoComponente(item) === "PRINCIPAL")
+        .reduce((total, item) => total + parseFloat(item.valor || 0), 0);
+      const juros = comps
+        .filter((item) => inferTipoComponente(item) === "JUROS")
+        .reduce((total, item) => total + parseFloat(item.valor || 0), 0);
+      const multa = comps
+        .filter((item) => inferTipoComponente(item) === "MULTA")
+        .reduce((total, item) => total + parseFloat(item.valor || 0), 0);
+      const desconto = comps
+        .filter((item) => inferTipoComponente(item) === "DESCONTO")
+        .reduce((total, item) => total + Math.abs(parseFloat(item.valor || 0)), 0);
+      const tarifa = parseFloat(l?.tarifa_esperada_valor || 0) || 0;
+      const totalPago = valorPrincipal + juros + multa - desconto;
+      return {
+        valorOriginalBanco,
+        valorPrincipal: valorPrincipal || (!comps.length ? valorOriginalBanco : 0),
+        juros,
+        multa,
+        desconto,
+        tarifa,
+        valorOriginalCalculado: totalPago,
+        totalPago: totalPago || valorOriginalBanco,
+      };
+    }
+
     function naturezaBadge(nat) {
       // Inversão contábil: crédito bancário = débito contábil, e vice-versa
       if (nat === "CREDITO") return '<span class="extrato-nat extrato-nat--debito">Débito</span>';
@@ -5038,14 +5548,23 @@
         const badge = comps.length > 0
           ? `<span class="detalhe-badge">${comps.length}</span>`
           : "";
-        const docKey = normalizeDoc(l.documento);
-        const compBadge = (docKey && state.comprovantes[docKey]?.itens?.length > 1)
-          ? `<span class="comprovante-badge" title="Comprovante vinculado">📎</span>`
+        const comprovante = getMatchedComprovante(l);
+        const tarifaMeta = hasExpectedTarifa(comprovante) ? getTarifaStatusMeta(l.status_vinculo_tarifa) : null;
+        const tarifaBadge = tarifaMeta
+          ? `<span class="comprovante-badge comprovante-badge--${escapeHtml(tarifaMeta.tone)}" title="Tarifa do comprovante">
+              <span>${escapeHtml(tarifaMeta.icon)}</span>
+              <span>${escapeHtml(tarifaMeta.label)}</span>
+            </span>`
           : "";
+        const compositionLabels = shouldUseComprovanteComposition(comprovante) ? getComprovanteDisplayBadges(comprovante) : [];
+        const compositionBadge = compositionLabels.length
+          ? `<span class="comprovante-badge comprovante-badge--info" title="Composição do pagamento">${escapeHtml(compositionLabels.join(" · "))}</span>`
+          : "";
+        const indicators = `${badge || ""}${tarifaBadge || ""}${compositionBadge || ""}`;
         return `
         <tr data-extrato-row data-natureza="${escapeHtml(l.natureza)}" data-linha-key="${escapeHtml(key)}" class="extrato-row-clickable" title="Clique para detalhar">
           <td class="extrato-td-date">${escapeHtml(formatDateBR(l.data))}</td>
-          <td class="extrato-td-hist">${escapeHtml(l.historico)}${badge}${compBadge}</td>
+          <td class="extrato-td-hist">${renderLancamentoDescriptionCell(l, indicators)}</td>
           <td class="extrato-td-doc">${escapeHtml(l.documento || "—")}</td>
           <td class="extrato-td-valor text-right">${escapeHtml(formatCurrency(l.valor))}</td>
           <td>${naturezaBadge(l.natureza)}</td>

@@ -19,7 +19,7 @@ from services.conciliador import (
     detect_tipo_arquivo,
     describe_transaction_metadata,
     inspect_importacao_file,
-    normalize_text,
+    normalizar_descricao_transacao,
     process_importacao,
 )
 from services.keycloak import KeycloakConfigurationError, KeycloakTokenError, exchange_code_for_token
@@ -435,6 +435,32 @@ class TransacaoImportadaViewSet(viewsets.ModelViewSet):
         if importacao_id:
             queryset = queryset.filter(importacao_id=importacao_id)
 
+        chave_descricao = self.request.query_params.get("chave_descricao") or self.request.query_params.get("descricao_normalizada")
+        if chave_descricao:
+            chave_descricao = normalizar_descricao_transacao(chave_descricao)
+            matching_ids = [
+                transacao.id
+                for transacao in queryset.only("id", "descricao_original")
+                if normalizar_descricao_transacao(transacao.descricao_original) == chave_descricao
+            ]
+            queryset = queryset.filter(id__in=matching_ids)
+
+        similar_a = self.request.query_params.get("similar_a")
+        if similar_a:
+            try:
+                referencia = TransacaoImportada.objects.only("importacao_id", "descricao_original").get(id=similar_a)
+            except TransacaoImportada.DoesNotExist:
+                return queryset.none()
+            chave_referencia = normalizar_descricao_transacao(referencia.descricao_original)
+            matching_ids = [
+                transacao.id
+                for transacao in queryset.filter(importacao_id=referencia.importacao_id).only("id", "descricao_original")
+                if normalizar_descricao_transacao(transacao.descricao_original) == chave_referencia
+            ]
+            queryset = queryset.filter(
+                id__in=matching_ids,
+            )
+
         tipo_movimento = self.request.query_params.get("tipo_movimento")
         if tipo_movimento:
             queryset = queryset.filter(tipo_movimento=tipo_movimento)
@@ -446,6 +472,28 @@ class TransacaoImportadaViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(regra_aplicada__isnull=False)
 
         return queryset
+
+    @action(detail=True, methods=["get"])
+    def similares(self, request, pk=None):
+        transacao = self.get_object()
+        chave_descricao = normalizar_descricao_transacao(transacao.descricao_original)
+        queryset = self.get_queryset()
+        if request.query_params.get("mesma_importacao", "true").lower() not in {"false", "0", "no"}:
+            queryset = queryset.filter(importacao_id=transacao.importacao_id)
+        matching_ids = [
+            item.id
+            for item in queryset.only("id", "descricao_original")
+            if normalizar_descricao_transacao(item.descricao_original) == chave_descricao
+        ]
+        queryset = queryset.filter(id__in=matching_ids)
+        serializer = self.get_serializer(queryset.order_by("data_movimento", "id"), many=True)
+        return Response(
+            {
+                "chave_descricao": chave_descricao,
+                "total": len(serializer.data),
+                "resultados": serializer.data,
+            }
+        )
 
     def perform_update(self, serializer):
         instance = self.get_object()
@@ -543,7 +591,7 @@ class TransacaoImportadaViewSet(viewsets.ModelViewSet):
             output = io.StringIO()
             writer = csv.writer(output)
             writer.writerow([
-                "Data", "Tipo", "Descrição", "Valor Principal", "Juros", "Multa", "Desconto", "Tarifa",
+                "Data", "Tipo", "Descrição", "Chave Descrição", "Valor Principal", "Juros", "Multa", "Desconto", "Tarifa",
                 "Conta Débito", "Conta Crédito", "Histórico", "Categoria", "Subcategoria", "Status Tarifa"
             ])
 
@@ -567,10 +615,13 @@ class TransacaoImportadaViewSet(viewsets.ModelViewSet):
                 if t.lancamento_relacionado:
                     tarifa = t.lancamento_relacionado.valor
 
+                chave_descricao = normalizar_descricao_transacao(t.descricao_original)
+
                 writer.writerow([
                     t.data_movimento.isoformat() if t.data_movimento else "",
                     t.get_tipo_movimento_display(),
                     t.descricao_original[:100],
+                    chave_descricao,
                     str(principal),
                     str(juros),
                     str(multa),
@@ -589,6 +640,7 @@ class TransacaoImportadaViewSet(viewsets.ModelViewSet):
                         t.lancamento_relacionado.data_movimento.isoformat() if t.lancamento_relacionado.data_movimento else "",
                         "TARIFA",
                         t.lancamento_relacionado.descricao_original[:100],
+                        normalizar_descricao_transacao(t.lancamento_relacionado.descricao_original),
                         "",
                         "",
                         "",
@@ -618,6 +670,7 @@ class TransacaoImportadaViewSet(viewsets.ModelViewSet):
                 "id": str(t.id),
                 "data": t.data_movimento.isoformat() if t.data_movimento else None,
                 "descricao": t.descricao_original,
+                "chave_descricao": normalizar_descricao_transacao(t.descricao_original),
                 "tipo_movimento": t.tipo_movimento,
                 "valor_total": str(t.valor),
                 "componentes": [],
@@ -721,7 +774,7 @@ class ExtratoPreviewView(APIView):
 
         lancamentos = []
         for l in resultado.lancamentos:
-            descricao_normalizada = normalize_text(l.descricao_original)
+            descricao_normalizada = normalizar_descricao_transacao(l.descricao_original)
             metadata = describe_transaction_metadata(
                 l.descricao_original,
                 descricao_normalizada=descricao_normalizada,
@@ -735,6 +788,7 @@ class ExtratoPreviewView(APIView):
                     "data_ocorrencia": metadata["data_ocorrencia"].isoformat() if metadata["data_ocorrencia"] else None,
                     "historico": l.descricao_original,
                     "descricao": l.descricao_original,
+                    "chave_descricao": descricao_normalizada,
                     "descricao_normalizada": descricao_normalizada,
                     "documento": l.documento,
                     "valor": str(l.valor),

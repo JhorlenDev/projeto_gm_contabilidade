@@ -44,6 +44,33 @@ DEFAULT_NORMALIZATION_OPTIONS = {
     "maiusculo": True,
     "colapsar_espacos": True,
 }
+KNOWN_TRANSACTION_DESCRIPTION_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("TARIFA PIX ENVIADO", (r"\bTARIFA\b.*\bPIX\b.*\bENVIAD[AO]\b",)),
+    ("TARIFA PIX RECEBIDO", (r"\bTARIFA\b.*\bPIX\b.*\bRECEBID[AO]\b",)),
+    ("TARIFA PIX", (r"\bTARIFA\b.*\bPIX\b",)),
+    ("PIX RECEBIDO QR CODE", (r"\bPIX\b.*\bRECEBID[AO]\b.*\bQR\s*CODE\b",)),
+    ("PIX RECEBIDO", (r"\bPIX\b.*\bRECEBID[AO]\b",)),
+    ("PIX ENVIADO", (r"\bPIX\b.*\bENVIAD[AO]\b",)),
+    ("PIX DEVOLVIDO", (r"\bPIX\b.*\bDEVOLVID[AO]\b",)),
+    ("TED RECEBIDA", (r"\bTED\b.*\bRECEBID[AO]\b",)),
+    ("TED ENVIADA", (r"\bTED\b.*\bENVIAD[AO]\b",)),
+    ("DOC RECEBIDO", (r"\bDOC\b.*\bRECEBID[AO]\b",)),
+    ("DOC ENVIADO", (r"\bDOC\b.*\bENVIAD[AO]\b",)),
+    ("TRANSFERENCIA RECEBIDA", (r"\bTRANSF(?:ERENCIA)?\b.*\bRECEBID[AO]\b",)),
+    ("TRANSFERENCIA ENVIADA", (r"\bTRANSF(?:ERENCIA)?\b.*\bENVIAD[AO]\b",)),
+    ("PAGAMENTO BOLETO", (r"\bPAG(?:AMENTO|TO)\b.*\bBOLETO\b", r"\bBOLETO\b.*\bPAG(?:AMENTO|TO)\b")),
+    ("PAGAMENTO TITULO", (r"\bPAG(?:AMENTO|TO)\b.*\bTITULO\b",)),
+    ("DEBITO AUTOMATICO", (r"\bDEBITO\b.*\bAUTOMATICO\b",)),
+    ("COMPRA CARTAO", (r"\bCOMPRA\b.*\bCARTAO\b",)),
+    ("SAQUE", (r"\bSAQUE\b",)),
+    ("DEPOSITO", (r"\bDEPOSITO\b",)),
+    ("ESTORNO", (r"\bESTORNO\b",)),
+    ("JUROS", (r"\bJUROS\b",)),
+    ("IOF", (r"\bIOF\b",)),
+    ("RENDIMENTO", (r"\bRENDIMENTO\b",)),
+    ("TARIFA BANCARIA", (r"\bTARIFA\b.*\bBANCARIA\b",)),
+    ("MANUTENCAO CONTA", (r"\bMANUTENCAO\b.*\bCONTA\b",)),
+)
 
 
 @dataclass(slots=True)
@@ -94,6 +121,59 @@ def normalize_text(value: Any, *, options: dict[str, Any] | None = None) -> str:
     if merged.get("maiusculo", True):
         text = text.upper()
     return text
+
+
+def _strip_trailing_reference_tokens(text: str) -> str:
+    tokens = text.split()
+    while len(tokens) >= 3 and all(token.isdigit() for token in tokens[-3:]):
+        last_lengths = [len(token) for token in tokens[-3:]]
+        if last_lengths in ([2, 2, 4], [2, 2, 2]):
+            tokens = tokens[:-3]
+            continue
+        break
+
+    while tokens:
+        token = tokens[-1]
+        if token.isdigit() and len(token) >= 4:
+            tokens.pop()
+            continue
+        if re.fullmatch(r"[A-Z0-9]*\d[A-Z0-9]*", token) and len(token) >= 4:
+            tokens.pop()
+            continue
+        break
+
+    return " ".join(tokens)
+
+
+def normalizar_descricao_transacao(value: Any, *, options: dict[str, Any] | None = None) -> str:
+    text = normalize_text(
+        value,
+        options={
+            **(options or {}),
+            "remover_numeros": False,
+            "remover_especiais": True,
+            "remover_acentos": True,
+            "maiusculo": True,
+            "colapsar_espacos": True,
+        },
+    )
+    if not text:
+        return ""
+
+    text = re.sub(r"\bQRCODE\b", "QR CODE", text)
+    text = re.sub(r"\bPAGTO\b", "PAGAMENTO", text)
+    text = re.sub(r"\bTRANSF\b", "TRANSFERENCIA", text)
+    text = re.sub(r"\bMANUTENCAO\s+DE\s+CONTA\b", "MANUTENCAO CONTA", text)
+    text = re.sub(r"\s+", " ", text).strip()
+
+    for canonical, patterns in KNOWN_TRANSACTION_DESCRIPTION_PATTERNS:
+        if any(re.search(pattern, text) for pattern in patterns):
+            return canonical
+
+    return _strip_trailing_reference_tokens(text)
+
+
+normalize_transaction_description = normalizar_descricao_transacao
 
 
 def _read_uploaded_bytes(uploaded_file) -> bytes:
@@ -233,8 +313,16 @@ def _extract_occurrence_date(description: str, *, reference_date: date | None = 
 
 
 def _classify_transaction(parsed: ParsedTransaction) -> tuple[str, date | None]:
-    description = parsed.descricao_normalizada or normalize_text(parsed.descricao_original)
+    description = parsed.descricao_normalizada or normalizar_descricao_transacao(parsed.descricao_original)
     occurrence_date = _extract_occurrence_date(parsed.descricao_original, reference_date=parsed.data_movimento) or parsed.data_movimento
+
+    pix_tariff_patterns = [
+        "TARIFA PIX ENVIADO",
+        "TARIFA PIX RECEBIDO",
+        "TARIFA PIX",
+    ]
+    if any(pattern in description for pattern in pix_tariff_patterns):
+        return TipoLancamento.TARIFA, occurrence_date
 
     grouped_patterns = [
         "DEBITO SERVICO COBRANCA",
@@ -290,7 +378,7 @@ def describe_transaction_metadata(
     descricao_normalizada: str = "",
     data_movimento: date | None = None,
 ) -> dict[str, Any]:
-    normalized = descricao_normalizada or normalize_text(descricao_original)
+    normalized = descricao_normalizada or normalizar_descricao_transacao(descricao_original)
     fallback_date = data_movimento or timezone.localdate()
     parsed = ParsedTransaction(
         linha_origem=None,
@@ -369,9 +457,19 @@ def _extract_pdf_text(uploaded_file) -> tuple[list[str], list[dict[str, Any]], s
         r"(?P<data>\d{2}/\d{2}(?:/\d{2,4})?)\s+(?P<descricao>.+?)\s+(?P<valor>\(?-?[\d.]+,[\d]{2}\)?)(?:\s+(?P<tipo>[CD]))?$",
         flags=re.IGNORECASE,
     )
+    skip_pattern = re.compile(
+        r"^(Dt\.\s+balancete|Lançamentos|Cliente\s*-|Agência|Conta corrente|Per[íi]odo|"
+        r"Consultas\s*-|G\d{15}|Saldo\s+Anterior|S\s*A\s*L\s*D\s*O|Transação\s+efetuada"
+        r"|Serviço\s+de\s+Atendimento|Para\s+deficientes|Ouvidoria|SAC\s*[0-9])",
+        re.IGNORECASE,
+    )
     for line_number, line in enumerate(lines, start=1):
         match = pattern.search(line)
         if not match:
+            if rows and not skip_pattern.search(line):
+                previous_description = rows[-1]["DESCRICAO"]
+                if line not in previous_description:
+                    rows[-1]["DESCRICAO"] = f"{previous_description} — {line}".strip()
             continue
 
         rows.append(
@@ -451,7 +549,7 @@ def _build_transaction_row(
             tipo_movimento = TipoMovimento.DEBITO if _value_is_negative(raw_valor) else TipoMovimento.CREDITO
 
     data_movimento = _parse_date(raw_data, date_format=date_format or None, reference_date=referencia)
-    descricao_normalizada = normalize_text(descricao_original, options=normalizacao or None)
+    descricao_normalizada = normalizar_descricao_transacao(descricao_original, options=normalizacao or None)
 
     provisional = ParsedTransaction(
         linha_origem=linha_origem,
@@ -636,11 +734,11 @@ def process_importacao(importacao: ImportacaoExtrato, configuracao: dict[str, An
 
 
 def _rule_matches_description(rule: RegraConciliador, description: str) -> bool:
-    reference = normalize_text(rule.texto_referencia)
+    reference = normalizar_descricao_transacao(rule.texto_referencia)
     if not reference:
         return False
 
-    target = normalize_text(description)
+    target = normalizar_descricao_transacao(description)
     if rule.tipo_comparacao == TipoComparacao.IGUAL:
         return target == reference
 
@@ -872,7 +970,7 @@ def _processar_tarifa_pix_ted(
             "data_movimento": transacao.data_movimento,
             "data_ocorrencia": transacao.data_ocorrencia or transacao.data_movimento,
             "descricao_original": f"Tarifa {transacao.descricao_original[:100]}",
-            "descricao_normalizada": f"TARIFA {normalize_text(transacao.descricao_original)[:100]}",
+            "descricao_normalizada": normalizar_descricao_transacao(f"Tarifa {transacao.descricao_original}")[:100],
             "valor": abs(tarifa_valor),
             "tipo_movimento": TipoMovimento.DEBITO,
             "status_vinculo_tarifa": StatusVinculoTarifa.NAO_APLICA,
@@ -907,7 +1005,7 @@ def conciliar_tarifas_importacao(importacao: ImportacaoExtrato) -> dict[str, Any
     Concilia tarifas para todos os lançamentos PRINCIPAL de uma importação.
 
     Prioridade:
-    1. Tarifa PIX individual (mesma data ocorrência, mesmo valor)
+    1. Tarifa PIX individual em qualquer dia (mesma data ocorrência)
     2. Tarifa agrupada (mesma data ocorrência)
     3. Não encontrada
     """
@@ -958,13 +1056,13 @@ def conciliar_tarifas_importacao(importacao: ImportacaoExtrato) -> dict[str, Any
                 continue
 
             desc_tarifa = (tarifa.descricao_normalizada or "").upper()
-            data_ocorrencia_tarifa = tarifa.data_ocorrencia or tarifa.data_movimento
-
             is_tarifa_pix = "TARIFA PIX ENVIADO" in desc_tarifa or "TARIFA PIX RECEBIDO" in desc_tarifa
             if not is_tarifa_pix:
                 continue
 
-            if data_ocorrencia_principal == data_ocorrencia_tarifa and tarifa.valor > 0:
+            data_ocorrencia_tarifa = tarifa.data_ocorrencia or tarifa.data_movimento
+
+            if data_ocorrencia_principal == data_ocorrencia_tarifa:
                 tarifa_encontrada = tarifa
                 status_novo = StatusVinculoTarifa.ENCONTRADA
                 confianca = ConfiancaVinculo.ALTA
