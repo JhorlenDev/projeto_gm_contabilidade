@@ -204,8 +204,55 @@
   }
 
   async function sha256(input) {
-    const hash = await crypto.subtle.digest("SHA-256", textEncoder.encode(input));
-    return base64UrlEncode(new Uint8Array(hash));
+    if (crypto && crypto.subtle) {
+      const hash = await crypto.subtle.digest("SHA-256", textEncoder.encode(input));
+      return base64UrlEncode(new Uint8Array(hash));
+    }
+    return base64UrlEncode(_sha256Fallback(textEncoder.encode(input)));
+  }
+
+  function _sha256Fallback(data) {
+    const K = [
+      0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+      0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+      0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+      0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+      0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+      0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+      0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+      0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2,
+    ];
+    let h = [0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19];
+    const bits = data.length * 8;
+    const padded = [];
+    for (let i = 0; i < data.length; i++) padded.push(data[i]);
+    padded.push(0x80);
+    while ((padded.length % 64) !== 56) padded.push(0);
+    for (let i = 7; i >= 0; i--) padded.push((bits / Math.pow(2, i * 8)) & 0xff);
+    const rotr = (x, n) => ((x >>> n) | (x << (32 - n))) >>> 0;
+    for (let i = 0; i < padded.length; i += 64) {
+      const w = [];
+      for (let j = 0; j < 16; j++) w.push((padded[i+j*4]<<24)|(padded[i+j*4+1]<<16)|(padded[i+j*4+2]<<8)|padded[i+j*4+3]);
+      for (let j = 16; j < 64; j++) {
+        const s0 = rotr(w[j-15],7)^rotr(w[j-15],18)^(w[j-15]>>>3);
+        const s1 = rotr(w[j-2],17)^rotr(w[j-2],19)^(w[j-2]>>>10);
+        w.push((w[j-16]+s0+w[j-7]+s1)>>>0);
+      }
+      let [a,b,c,d,e,f,g,hh] = h;
+      for (let j = 0; j < 64; j++) {
+        const S1 = rotr(e,6)^rotr(e,11)^rotr(e,25);
+        const ch = (e&f)^(~e&g);
+        const t1 = (hh+S1+ch+K[j]+w[j])>>>0;
+        const S0 = rotr(a,2)^rotr(a,13)^rotr(a,22);
+        const maj = (a&b)^(a&c)^(b&c);
+        const t2 = (S0+maj)>>>0;
+        hh=g; g=f; f=e; e=(d+t1)>>>0; d=c; c=b; b=a; a=(t1+t2)>>>0;
+      }
+      h = [h[0]+a,h[1]+b,h[2]+c,h[3]+d,h[4]+e,h[5]+f,h[6]+g,h[7]+hh].map(v=>v>>>0);
+    }
+    const out = new Uint8Array(32);
+    h.forEach((v,i) => { out[i*4]=(v>>>24)&0xff; out[i*4+1]=(v>>>16)&0xff; out[i*4+2]=(v>>>8)&0xff; out[i*4+3]=v&0xff; });
+    return out;
   }
 
   function decodeBase64UrlJson(segment) {
@@ -377,15 +424,7 @@
   }
 
   function normalizePanelView(view) {
-    if (
-      view === "clientes" ||
-      view === "conciliador" ||
-      view === "perfis" ||
-      view === "contabilidade" ||
-      view === "bancos" ||
-      view === "financeiro" ||
-      view === "seguranca"
-    ) {
+    if (view === "clientes" || view === "conciliador" || view === "perfis" || view === "contabilidade") {
       return view;
     }
     return "dashboard";
@@ -1188,9 +1227,9 @@
     const clientCode = formatClientCode(client.codigo) || "";
     const docLabel = card.querySelector("[data-client-cpf-cnpj-label]");
     if (clientCode) {
-      docLabel.textContent = `CNPJ: ${formattedDoc}        Código: ${clientCode}`;
+      docLabel.innerHTML = `<span>${formattedDoc}</span> <span>Código: ${clientCode}</span>`;
     } else {
-      updateText(docLabel, `CNPJ: ${formattedDoc}`);
+      updateText(docLabel, formattedDoc);
     }
     applyClientStatusPill(card.querySelector("[data-client-status-pill]"), client.situacao_label || client.situacao);
 
@@ -1322,27 +1361,6 @@
       nome: String(record?.nome || "").trim(),
       cnpj: String(record?.cnpj || "").trim(),
     }));
-  }
-
-  function normalizeBancoRecord(record) {
-    return {
-      id: String(record?.id || "").trim(),
-      codigo: String(record?.codigo || "").trim(),
-      nome: String(record?.nome || "").trim(),
-      slug: String(record?.slug || "").trim(),
-      sigla: String(record?.sigla || "").trim(),
-      cor_principal: String(record?.cor_principal || "#64748b").trim() || "#64748b",
-      logo_url: String(record?.logo_url || "").trim(),
-      ativo: record?.ativo !== false,
-      criado_em: String(record?.criado_em || "").trim(),
-      atualizado_em: String(record?.atualizado_em || "").trim(),
-    };
-  }
-
-  async function loadBancosFromApi(session, { todos = false } = {}) {
-    const payload = await apiRequest(session, `/bancos/${todos ? "?ativo=" : "?ativo=true"}`);
-    const records = Array.isArray(payload) ? payload : (payload?.results || []);
-    return records.map(normalizeBancoRecord);
   }
 
   function getConciliadorCompanySelect() {
@@ -2353,250 +2371,6 @@
     setStatus("Selecione um escritório e uma empresa para começar.");
   }
 
-  function setupBancosCrud(session) {
-    const panel = document.querySelector('[data-panel-view-section="bancos"]');
-    if (!panel) return;
-
-    const tbody = panel.querySelector("[data-banco-tbody]");
-    const emptyRow = panel.querySelector("[data-banco-empty]");
-    const searchInput = panel.querySelector("[data-banco-search]");
-    const inativosInput = panel.querySelector("[data-banco-inativos]");
-    const newButton = panel.querySelector("[data-banco-new]");
-    const dialog = panel.querySelector("[data-banco-dialog]");
-    const form = panel.querySelector("[data-banco-form]");
-    const closeButtons = panel.querySelectorAll("[data-banco-close], [data-banco-cancel]");
-    const errorEl = panel.querySelector("[data-banco-error]");
-    const dialogLabel = panel.querySelector("[data-banco-dialog-label]");
-    const dialogTitle = panel.querySelector("[data-banco-dialog-title]");
-    const logoPreview = panel.querySelector("[data-banco-logo-preview]");
-    const logoImg = panel.querySelector("[data-banco-logo-img]");
-
-    if (!tbody || !form) return;
-
-    const state = {
-      bancos: [],
-      search: "",
-      showInativos: false,
-      editingId: "",
-    };
-
-    function normalizeBancoText(value) {
-      return String(value || "")
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .toLowerCase()
-        .trim();
-    }
-
-    function bancoMatchesSearch(banco) {
-      const query = normalizeBancoText(state.search);
-      if (!query) return true;
-      return [banco.nome, banco.codigo, banco.sigla, banco.slug].some((value) => normalizeBancoText(value).includes(query));
-    }
-
-    function currentBancos() {
-      return state.bancos
-        .filter((banco) => state.showInativos || banco.ativo)
-        .filter(bancoMatchesSearch)
-        .sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
-    }
-
-    function renderBancos() {
-      const bancos = currentBancos();
-      const rows = bancos.map((banco) => {
-        const logo = banco.logo_url
-          ? `<span class="bancos-logo" style="--bank-color: ${escapeHtml(banco.cor_principal)}"><img src="${escapeHtml(banco.logo_url)}" alt="" loading="lazy" /></span>`
-          : `<span class="bancos-logo bancos-logo--fallback" style="--bank-color: ${escapeHtml(banco.cor_principal)}">${escapeHtml(banco.sigla || banco.codigo || "BK")}</span>`;
-        const statusClass = banco.ativo ? "contab-badge--ativo" : "contab-badge--inativo";
-        const statusLabel = banco.ativo ? "Ativo" : "Inativo";
-
-        return `
-          <tr data-banco-id="${escapeHtml(banco.id)}">
-            <td>
-              <div class="bancos-bank-cell">
-                ${logo}
-                <div>
-                  <strong>${escapeHtml(banco.nome)}</strong>
-                  <span>${escapeHtml(banco.slug || "-")}</span>
-                </div>
-              </div>
-            </td>
-            <td><span class="perfis-code">${escapeHtml(banco.codigo || "-")}</span></td>
-            <td>${escapeHtml(banco.sigla || "-")}</td>
-            <td><span class="bancos-color-chip" style="--bank-color: ${escapeHtml(banco.cor_principal)}"></span>${escapeHtml(banco.cor_principal || "-")}</td>
-            <td><span class="contab-badge ${statusClass}">${statusLabel}</span></td>
-            <td>
-              <div class="bancos-actions">
-                <button type="button" class="secondary icon-only" title="Editar" data-banco-edit="${escapeHtml(banco.id)}">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                </button>
-                <button type="button" class="secondary icon-only" title="${banco.ativo ? "Desativar" : "Ativar"}" data-banco-toggle="${escapeHtml(banco.id)}">
-                  ${banco.ativo 
-                    ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M18.36 6.64a9 9 0 1 1-12.73 0" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><line x1="12" y1="2" x2="12" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>'
-                    : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><polyline points="22 4 12 14.01 9 11.01" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>'
-                  }
-                </button>
-              </div>
-            </td>
-          </tr>
-        `;
-      }).join("");
-
-      tbody.innerHTML = rows || "";
-      if (emptyRow) {
-        emptyRow.hidden = bancos.length > 0;
-        if (!bancos.length) tbody.appendChild(emptyRow);
-      }
-    }
-
-    function setError(message = "") {
-      if (!errorEl) return;
-      errorEl.hidden = !message;
-      errorEl.textContent = message;
-    }
-
-    function buildSlug(value) {
-      return normalizeBancoText(value)
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-+|-+$/g, "");
-    }
-
-    function openDialog(banco = null) {
-      state.editingId = banco?.id || "";
-      form.reset();
-      setError("");
-
-      form.elements.id.value = banco?.id || "";
-      form.elements.nome.value = banco?.nome || "";
-      form.elements.codigo.value = banco?.codigo || "";
-      form.elements.slug.value = banco?.slug || "";
-      form.elements.sigla.value = banco?.sigla || "";
-      form.elements.cor_principal.value = banco?.cor_principal || "#64748b";
-      form.elements.ativo.checked = banco ? Boolean(banco.ativo) : true;
-
-      if (logoPreview && logoImg) {
-        if (banco?.logo_url) {
-          logoImg.src = banco.logo_url;
-          logoPreview.hidden = false;
-        } else {
-          logoPreview.hidden = true;
-        }
-      }
-
-      if (dialogLabel) dialogLabel.textContent = banco ? "Editar banco" : "Novo banco";
-      if (dialogTitle) dialogTitle.textContent = banco ? banco.nome : "Cadastro de banco";
-
-      if (typeof dialog?.showModal === "function") dialog.showModal();
-      else dialog?.setAttribute("open", "");
-    }
-
-    function closeDialog() {
-      if (typeof dialog?.close === "function") dialog.close();
-      else dialog?.removeAttribute("open");
-    }
-
-    async function loadBancos() {
-      try {
-        state.bancos = await loadBancosFromApi(session, { todos: true });
-        window.__GM_BANCOS__ = state.bancos.filter((banco) => banco.ativo);
-        window.dispatchEvent(new CustomEvent("gm:bancos-updated", { detail: { bancos: window.__GM_BANCOS__ } }));
-      } catch (error) {
-        logError("Falha ao carregar bancos.", error);
-        state.bancos = [];
-      } finally {
-        renderBancos();
-      }
-    }
-
-    async function saveBanco() {
-      const payload = new FormData();
-      const logoFile = form.elements.logo.files?.[0] || null;
-      const removerLogo = form.elements.remover_logo?.checked || false;
-      payload.append("nome", form.elements.nome.value.trim());
-      payload.append("codigo", form.elements.codigo.value.trim());
-      payload.append("slug", form.elements.slug.value.trim());
-      payload.append("sigla", form.elements.sigla.value.trim());
-      payload.append("cor_principal", form.elements.cor_principal.value || "#64748b");
-      payload.append("ativo", form.elements.ativo.checked ? "true" : "false");
-      if (logoFile) payload.append("logo", logoFile);
-      if (removerLogo) payload.append("remover_logo", "true");
-
-      if (!payload.get("nome") || !payload.get("codigo") || !payload.get("slug")) {
-        throw new Error("Nome, código e slug são obrigatórios.");
-      }
-
-      const isEdit = Boolean(state.editingId);
-      const path = isEdit ? `/bancos/${state.editingId}/` : "/bancos/";
-      const method = isEdit ? "PATCH" : "POST";
-      return apiRequest(session, path, { method, body: payload });
-    }
-
-    newButton?.addEventListener("click", () => openDialog());
-    closeButtons.forEach((button) => button.addEventListener("click", closeDialog));
-    dialog?.addEventListener("click", (event) => {
-      if (event.target === dialog) closeDialog();
-    });
-
-    searchInput?.addEventListener("input", () => {
-      state.search = searchInput.value;
-      renderBancos();
-    });
-
-    inativosInput?.addEventListener("change", () => {
-      state.showInativos = inativosInput.checked;
-      renderBancos();
-    });
-
-    form.elements.nome?.addEventListener("input", () => {
-      if (!state.editingId && !form.elements.slug.value.trim()) {
-        form.elements.slug.value = buildSlug(form.elements.nome.value);
-      }
-    });
-
-    tbody.addEventListener("click", async (event) => {
-      const editButton = event.target.closest("[data-banco-edit]");
-      const toggleButton = event.target.closest("[data-banco-toggle]");
-
-      if (editButton) {
-        const banco = state.bancos.find((item) => item.id === editButton.dataset.bancoEdit);
-        if (banco) openDialog(banco);
-        return;
-      }
-
-      if (toggleButton) {
-        const banco = state.bancos.find((item) => item.id === toggleButton.dataset.bancoToggle);
-        if (!banco) return;
-        toggleButton.disabled = true;
-        try {
-          await apiRequest(session, `/bancos/${banco.id}/`, { method: "PATCH", body: { ativo: !banco.ativo } });
-          await loadBancos();
-        } catch (error) {
-          logError("Falha ao alternar banco.", error);
-        } finally {
-          toggleButton.disabled = false;
-        }
-      }
-    });
-
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      setError("");
-      const submit = panel.querySelector("[data-banco-submit]");
-      if (submit) submit.disabled = true;
-      try {
-        await saveBanco();
-        closeDialog();
-        await loadBancos();
-      } catch (error) {
-        setError(error.message || "Falha ao salvar banco.");
-      } finally {
-        if (submit) submit.disabled = false;
-      }
-    });
-
-    loadBancos();
-  }
-
   function setupClientsCrud(session) {
     const panel = document.querySelector('[data-panel-view-section="clientes"]');
     if (!panel) {
@@ -2701,8 +2475,6 @@
       "banco pan": { initials: "PAN", className: "pan" },
       bv: { initials: "BV", className: "bv" },
     };
-    let accountBankOptions = [...ACCOUNT_BANK_OPTIONS];
-    let bankVisuals = { ...BANK_VISUALS };
     const certificateStatus = panel.querySelector("[data-client-certificate-status]");
     const certificateMeta = panel.querySelector("[data-client-certificate-meta]");
     const certificateInput = panel.querySelector("[data-client-certificate-file]");
@@ -2760,7 +2532,6 @@
       certificate: null,
       certificateLoading: false,
       relationRequestToken: 0,
-      bancos: [],
     };
 
     let lastCustomBankValue = "";
@@ -2930,7 +2701,7 @@
         return alias;
       }
 
-      return accountBankOptions.find((option) => normalizeBankValue(option) === normalized) || "";
+      return ACCOUNT_BANK_OPTIONS.find((option) => normalizeBankValue(option) === normalized) || "";
     }
 
     function makeBankInitials(value) {
@@ -2953,58 +2724,12 @@
       }
 
       const bankName = resolveKnownBank(account.banco) || account.banco || "Conta bancária";
-      const visual = bankVisuals[normalizeBankValue(bankName)];
+      const visual = BANK_VISUALS[normalizeBankValue(bankName)];
       return {
         label: bankName,
         initials: visual?.initials || makeBankInitials(bankName),
         className: visual?.className || "other",
-        color: visual?.color || "#64748b",
-        logoUrl: visual?.logoUrl || "",
       };
-    }
-
-    function populateAccountBankOptions(bancos = []) {
-      const bankSelect = clientAccountFormFields.bankSelect;
-      if (!bankSelect) {
-        return;
-      }
-
-      const activeBanks = bancos.filter((banco) => banco.ativo && banco.nome);
-      accountBankOptions = activeBanks.length ? activeBanks.map((banco) => banco.nome) : [...ACCOUNT_BANK_OPTIONS];
-      bankVisuals = { ...BANK_VISUALS };
-
-      activeBanks.forEach((banco) => {
-        bankVisuals[normalizeBankValue(banco.nome)] = {
-          initials: banco.sigla || makeBankInitials(banco.nome),
-          className: "custom",
-          color: banco.cor_principal || "#64748b",
-          logoUrl: banco.logo_url || "",
-        };
-      });
-
-      const currentValue = bankSelect.value;
-      bankSelect.replaceChildren();
-
-      const placeholder = document.createElement("option");
-      placeholder.value = "";
-      placeholder.textContent = "Selecione o banco";
-      bankSelect.appendChild(placeholder);
-
-      accountBankOptions.forEach((nome) => {
-        const option = document.createElement("option");
-        option.value = nome;
-        option.textContent = nome;
-        bankSelect.appendChild(option);
-      });
-
-      const otherOption = document.createElement("option");
-      otherOption.value = ACCOUNT_BANK_OTHER_VALUE;
-      otherOption.textContent = "Outro";
-      bankSelect.appendChild(otherOption);
-
-      if (currentValue && Array.from(bankSelect.options).some((option) => option.value === currentValue)) {
-        bankSelect.value = currentValue;
-      }
     }
 
     function syncAccountBankField() {
@@ -3333,39 +3058,27 @@
           : (account.numero || "—");
         const statusLabel = account.ativo ? "Ativa" : "Inativa";
         const statusClass = account.ativo ? "status-ok" : "status-error";
-        const bankLogoStyle = bankVisual.color ? ` style="--bank-color: ${escapeHtml(bankVisual.color)}"` : "";
-        const bankLogoContent = bankVisual.logoUrl
-          ? `<img src="${escapeHtml(bankVisual.logoUrl)}" alt="" loading="lazy" />`
-          : escapeHtml(bankVisual.initials);
 
         return `
           <article class="client-account-item" data-client-account-id="${escapeHtml(account.id)}">
             <div class="client-account-item-head">
               <div class="client-account-main">
-                <span class="client-bank-logo client-bank-logo--${escapeHtml(bankVisual.className)}" title="${escapeHtml(bankVisual.label)}" aria-hidden="true"${bankLogoStyle}>${bankLogoContent}</span>
+                <span class="client-bank-logo client-bank-logo--${escapeHtml(bankVisual.className)}" title="${escapeHtml(bankVisual.label)}" aria-hidden="true">${escapeHtml(bankVisual.initials)}</span>
                 <div class="client-account-item-title">
                   <strong>${escapeHtml(bankLabel)}</strong>
                   <span>Agência: ${escapeHtml(account.agencia || "—")}</span>
                   <span>Conta: ${escapeHtml(accountLabel)}</span>
                 </div>
               </div>
-              <div class="client-account-right">
-                <span class="client-related-badge ${statusClass}">${statusLabel}</span>
-                ${canManage ? `
-                  <div class="client-account-item-actions">
-                    <button type="button" class="secondary icon-only" title="Editar" data-client-account-edit>
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                    </button>
-                    <button type="button" class="secondary icon-only" title="${account.ativo ? "Desativar" : "Ativar"}" data-client-account-toggle>
-                      ${account.ativo 
-                        ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M18.36 6.64a9 9 0 1 1-12.73 0" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><line x1="12" y1="2" x2="12" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>'
-                        : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><polyline points="22 4 12 14.01 9 11.01" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>'
-                      }
-                    </button>
-                  </div>
-                ` : ""}
-              </div>
+              <span class="client-related-badge ${statusClass}">${statusLabel}</span>
             </div>
+            ${account.observacoes ? `<div class="client-account-item-meta">${escapeHtml(account.observacoes)}</div>` : ""}
+            ${canManage ? `
+              <div class="client-account-item-actions">
+                <button type="button" class="secondary" data-client-account-edit>Editar</button>
+                <button type="button" class="secondary" data-client-account-toggle>${account.ativo ? "Desativar" : "Ativar"}</button>
+              </div>
+            ` : ""}
           </article>
         `;
       }).join("");
@@ -4188,16 +3901,7 @@
     async function reloadClients() {
       state.loading = true;
       try {
-        const [clients, bancos] = await Promise.all([
-          loadClientsFromApi(session),
-          loadBancosFromApi(session).catch((error) => {
-            logError("Falha ao carregar bancos para contas.", error);
-            return [];
-          }),
-        ]);
-        state.clients = clients;
-        state.bancos = bancos;
-        populateAccountBankOptions(bancos);
+        state.clients = await loadClientsFromApi(session);
         state.error = "";
         updateDashboardStats(state.clients);
       } catch (error) {
@@ -4209,13 +3913,6 @@
         renderState();
       }
     }
-
-    window.addEventListener("gm:bancos-updated", (event) => {
-      const bancos = Array.isArray(event.detail?.bancos) ? event.detail.bancos.map(normalizeBancoRecord) : [];
-      state.bancos = bancos;
-      populateAccountBankOptions(bancos);
-      renderAccounts();
-    });
 
     async function saveClient() {
       const payload = getClientFormData(form);
@@ -5132,7 +4829,6 @@
     const comprovanteLabel = panel.querySelector("[data-comprovante-file-label]");
     const comprovanteDropzone = panel.querySelector("[data-comprovante-dropzone]");
     const submitBtn = panel.querySelector("[data-extrato-submit]");
-    const clearSelectionBtn = panel.querySelector("[data-extrato-clear]");
     const errorEl = panel.querySelector("[data-extrato-error]");
     const resultCard = panel.querySelector("[data-extrato-result]");
     const metaEl = panel.querySelector("[data-extrato-meta]");
@@ -5141,15 +4837,6 @@
     const tbody = panel.querySelector("[data-extrato-tbody]");
     const searchInput = panel.querySelector("[data-extrato-search]");
     const filterChips = Array.from(panel.querySelectorAll("[data-extrato-natureza-filter]"));
-
-    // Função auxiliar para normalizar nomes de banco
-    function normalizeBankValue(value) {
-      return String(value || "")
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .toLowerCase()
-        .trim();
-    }
     const totalsEl = panel.querySelector("[data-extrato-totals]");
     const totalCreditoEl = panel.querySelector("[data-extrato-total-credito]");
     const totalDebitoEl = panel.querySelector("[data-extrato-total-debito]");
@@ -5177,9 +4864,7 @@
       regrasMap: {},     // keyed por historicNormKey → { id, codDebito, codCredito, codHistorico }
       regrasFlexi: [],   // todas as regras ordenadas por prioridade (para matching CONTEM/IGUAL/COMECA_COM)
       clientes: [],      // lista completa de clientes carregados (para validação de CNPJ)
-      comprovantes: [],  // lista bruta retornada pela API de comprovantes
-      comprovanteMatches: {},
-      comprovanteFileUrls: {},
+      comprovantes: {},  // keyed por documento (string) → ComprovanteResult da API
       contasBancarias: [], // contas bancárias da empresa selecionada (para pré-preenchimento)
     };
 
@@ -5211,30 +4896,6 @@
     function updateFileLabel(file) {
       if (fileLabel) fileLabel.textContent = file.name;
       if (dropzone) dropzone.dataset.hasFile = "true";
-    }
-
-    function clearVisualSelections() {
-      fileInput.value = "";
-      if (comprovanteInput) comprovanteInput.value = "";
-      if (fileLabel) fileLabel.textContent = "Clique ou arraste o PDF aqui";
-      if (comprovanteLabel) comprovanteLabel.textContent = "Clique para selecionar (múltiplos PDFs)";
-      if (dropzone) {
-        dropzone.dataset.hasFile = "false";
-        dropzone.classList.remove("is-drag-over");
-      }
-      if (comprovanteDropzone) {
-        comprovanteDropzone.dataset.hasFile = "false";
-        comprovanteDropzone.classList.remove("is-drag-over");
-      }
-      releaseComprovanteFileUrls();
-      state.comprovantes = [];
-      state.comprovanteMatches = {};
-      hideDetalheComprovanteViewer();
-      setError("");
-    }
-
-    if (clearSelectionBtn) {
-      clearSelectionBtn.addEventListener("click", clearVisualSelections);
     }
 
     if (comprovanteDropzone && comprovanteInput) {
@@ -5279,19 +4940,6 @@
     // ── Upload e vinculação de comprovantes ───────────────────────────────
     async function uploadComprovantes(files) {
       try {
-        hideDetalheComprovanteViewer();
-        state.comprovantes = [];
-        state.comprovanteMatches = {};
-        releaseComprovanteFileUrls();
-
-        const fileUrlMap = {};
-        Array.from(files || []).forEach((file) => {
-          if (file?.name && !fileUrlMap[file.name]) {
-            fileUrlMap[file.name] = URL.createObjectURL(file);
-          }
-        });
-        state.comprovanteFileUrls = fileUrlMap;
-
         const fd = new FormData();
         for (const f of files) fd.append("arquivos", f);
         const resp = await fetch(apiUrl("/comprovante-preview/"), {
@@ -5299,26 +4947,18 @@
           headers: { Authorization: `Bearer ${session.accessToken}` },
           body: fd,
         });
-        if (!resp.ok) {
-          releaseComprovanteFileUrls();
-          return;
-        }
+        if (!resp.ok) return;
         const data = await resp.json();
-        state.comprovantes = (Array.isArray(data.comprovantes) ? data.comprovantes : []).map((item) => normalizeComprovanteRecord({
-          ...item,
-          _arquivoUrl: item?.arquivo_nome ? (state.comprovanteFileUrls[item.arquivo_nome] || "") : "",
-        }));
-        recomputeComprovanteMatches();
-        recomputeTarifaMatches();
+        // Indexa por documento (normalizado: sem zeros à esquerda)
+        state.comprovantes = {};
+        (data.comprovantes || []).forEach((c) => {
+          if (c.documento) {
+            state.comprovantes[c.documento] = c;
+          }
+        });
         // Re-renderiza tabela para mostrar indicadores de comprovante
-        updateCounts();
         renderTable();
-        if (state.detalheKey) {
-          const active = state.lancamentos.find((item) => lancamentoKey(item) === state.detalheKey);
-          if (active) openDetalhe(active);
-        }
       } catch (_) {
-        releaseComprovanteFileUrls();
         // Silencioso — comprovantes são opcionais
       }
     }
@@ -5328,19 +4968,6 @@
       if (!errorEl) return;
       errorEl.textContent = msg;
       errorEl.hidden = !msg;
-    }
-
-    function releaseComprovanteFileUrls() {
-      Object.values(state.comprovanteFileUrls || {}).forEach((url) => {
-        if (url) {
-          try {
-            URL.revokeObjectURL(url);
-          } catch (_) {
-            // noop
-          }
-        }
-      });
-      state.comprovanteFileUrls = {};
     }
 
     function normalizeCnpj(value) {
@@ -5358,417 +4985,6 @@
       return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(isFinite(num) ? num : 0);
     }
 
-    function normalizeDescricaoLancamento(value) {
-      return String(value || "")
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .replace(/[-–—_/\\|]+/g, " ")
-        .replace(/[^\w\s]/g, " ")
-        .replace(/\s+/g, " ")
-        .trim()
-        .toUpperCase();
-    }
-
-    function parseDateLike(value) {
-      if (!value) return null;
-      if (/^\d{4}-\d{2}-\d{2}$/.test(String(value))) return String(value);
-      const match = String(value).match(/(\d{2})\/(\d{2})\/(\d{2,4})/);
-      if (!match) return null;
-      const [, day, month, yearRaw] = match;
-      const year = yearRaw.length === 2 ? `20${yearRaw}` : yearRaw;
-      return `${year}-${month}-${day}`;
-    }
-
-    function extractOccurrenceDateFromText(value, fallbackDate = null) {
-      const text = String(value || "");
-      const patterns = [
-        /OCORR(?:E|Ê)NCIA\s*(\d{2}\/\d{2}\/\d{2,4})/i,
-        /TAR\.?\s+AGRUPADAS\s*[-:]?\s*OCORR(?:E|Ê)NCIA\s*(\d{2}\/\d{2}\/\d{2,4})/i,
-      ];
-      for (const pattern of patterns) {
-        const match = text.match(pattern);
-        if (match?.[1]) {
-          return parseDateLike(match[1]);
-        }
-      }
-      return fallbackDate || null;
-    }
-
-    function classifyLancamentoTipo(record) {
-      const descricao = normalizeDescricaoLancamento(record?.historico || record?.descricao_original || record?.descricao || "");
-      const fallbackDate = parseDateLike(record?.data || record?.data_movimento || record?.data_lancamento_extrato);
-      if (descricao.includes("DEBITO SERVICO COBRANCA") || descricao.includes("TAR AGRUPADAS") || descricao.includes("TARIFAS AGRUPADAS")) {
-        return {
-          tipo_lancamento: "TARIFA_AGRUPADA",
-          data_ocorrencia: extractOccurrenceDateFromText(record?.historico || record?.descricao_original || "", fallbackDate),
-        };
-      }
-
-      if (
-        descricao.includes("TARIFA")
-        || descricao.includes("PACOTE SERVICOS")
-        || descricao.includes("PACOTE DE SERVICOS")
-        || descricao.includes("MANUTENCAO PJ")
-        || descricao.includes("SERVICO COBRANCA")
-      ) {
-        return {
-          tipo_lancamento: "TARIFA",
-          data_ocorrencia: extractOccurrenceDateFromText(record?.historico || record?.descricao_original || "", fallbackDate),
-        };
-      }
-
-      return {
-        tipo_lancamento: "PRINCIPAL",
-        data_ocorrencia: null,
-      };
-    }
-
-    function normalizeLancamentoRecord(record) {
-      const historico = String(record?.historico || record?.descricao_original || "").trim();
-      const valorOriginalBanco = parseFloat(record?.valor_original_do_banco ?? record?.valor ?? 0);
-      const metadata = classifyLancamentoTipo(record);
-      return {
-        ...record,
-        linha: record?.linha ?? record?.linha_origem ?? null,
-        linha_origem: record?.linha_origem ?? record?.linha ?? null,
-        data: record?.data || record?.data_movimento || null,
-        data_lancamento_extrato: record?.data_lancamento_extrato || record?.data || record?.data_movimento || null,
-        data_ocorrencia: record?.data_ocorrencia || metadata.data_ocorrencia || null,
-        historico,
-        descricao: historico,
-        descricao_original: historico,
-        descricao_normalizada: String(record?.descricao_normalizada || normalizeDescricaoLancamento(historico)).trim(),
-        documento: String(record?.documento || record?.dados_brutos?.DOCUMENTO || record?.dados_brutos?.documento || "").trim(),
-        natureza: String(record?.natureza || record?.tipo_movimento || record?.natureza_inferida || "INDEFINIDA").toUpperCase(),
-        valor: Number.isFinite(valorOriginalBanco) ? valorOriginalBanco : 0,
-        valor_original_do_banco: Number.isFinite(valorOriginalBanco) ? valorOriginalBanco : 0,
-        tipo_lancamento: String(record?.tipo_lancamento || metadata.tipo_lancamento || "PRINCIPAL").toUpperCase(),
-        lancamento_relacionado_key: record?.lancamento_relacionado_key || null,
-        status_vinculo_tarifa: String(record?.status_vinculo_tarifa || "NAO_APLICA").toUpperCase(),
-        confianca_vinculo: String(record?.confianca_vinculo || "BAIXA").toUpperCase(),
-        tarifa_esperada_valor: parseFloat(record?.tarifa_esperada_valor || 0) || 0,
-        comprovante_tipo: String(record?.comprovante_tipo || "").toUpperCase(),
-      };
-    }
-
-    function normalizeLancamentos(records) {
-      return (Array.isArray(records) ? records : []).map(normalizeLancamentoRecord);
-    }
-
-    function getLancamentoDescricaoNormalizada(l) {
-      return String(l?.descricao_normalizada || normalizeDescricaoLancamento(l?.historico || "")).trim();
-    }
-
-    function getNormalizedComponentDescription(component) {
-      return normalizeDescricaoLancamento(component?.descricao || "");
-    }
-
-    function isTarifaComponent(component) {
-      return inferTipoComponente(component) === "TARIFA";
-    }
-
-    function getComponentExportType(component) {
-      const tipo = inferTipoComponente(component);
-      return tipo || "OUTROS";
-    }
-
-    function normalizeComprovanteRecord(record) {
-      return {
-        ...record,
-        tipo: String(record?.tipo || "").toLowerCase(),
-        documento: String(record?.documento || "").trim(),
-        data_pagamento: record?.data_pagamento || null,
-        valor_documento: parseFloat(record?.valor_documento || 0) || 0,
-        valor_total: parseFloat(record?.valor_total || 0) || 0,
-        tarifa_valor: parseFloat(record?.tarifa_valor || 0) || 0,
-        juros_valor: parseFloat(record?.juros_valor || 0) || 0,
-        multa_valor: parseFloat(record?.multa_valor || 0) || 0,
-        desconto_valor: parseFloat(record?.desconto_valor || 0) || 0,
-        itens: Array.isArray(record?.itens) ? record.itens : [],
-      };
-    }
-
-    function getComprovanteOperationKind(comp) {
-      const tipo = String(comp?.tipo || "").toLowerCase();
-      if (tipo.includes("pix")) return "PIX";
-      if (tipo.includes("ted")) return "TED";
-      if (tipo.includes("boleto")) return "BOLETO";
-      if (tipo.includes("convenio") || tipo.includes("darf")) return "PAGAMENTO";
-      return "OUTRO";
-    }
-
-    function hasExpectedTarifa(comp) {
-      return (parseFloat(comp?.tarifa_valor || 0) || 0) > 0;
-    }
-
-    function hasDetalhamentoComprovante(comp) {
-      const itens = Array.isArray(comp?.itens) ? comp.itens : [];
-      return itens.some((item) => {
-        const descricao = getNormalizedComponentDescription(item);
-        return descricao && descricao !== "PRINCIPAL";
-      });
-    }
-
-    function shouldUseComprovanteComposition(comp) {
-      return ["BOLETO", "PAGAMENTO"].includes(getComprovanteOperationKind(comp)) && hasDetalhamentoComprovante(comp);
-    }
-
-    function getComprovanteDisplayBadges(comp) {
-      const labels = [];
-      if (!comp) return labels;
-      if (hasExpectedTarifa(comp)) labels.push("+ tarifa");
-      if (parseFloat(comp?.juros_valor || 0) > 0) labels.push("juros");
-      if (parseFloat(comp?.multa_valor || 0) > 0) labels.push("multa");
-      if (parseFloat(comp?.desconto_valor || 0) > 0) labels.push("desconto");
-      return labels;
-    }
-
-    function getTarifaTypeHints(comp, lancamento) {
-      const hints = [];
-      const op = getComprovanteOperationKind(comp);
-      const descricao = getLancamentoDescricaoNormalizada(lancamento);
-      if (op === "PIX") {
-        hints.push("PIX");
-        if (descricao.includes("RECEB")) hints.push("RECEB");
-        if (descricao.includes("ENVI")) hints.push("ENVI");
-      }
-      if (op === "TED") {
-        hints.push("TED", "TRANSFER");
-      }
-      return hints;
-    }
-
-    function getTarifaOccurrenceDate(lancamento) {
-      return lancamento?.data_ocorrencia || lancamento?.data_lancamento_extrato || lancamento?.data || null;
-    }
-
-    function matchesTarifaHint(tarifaLaunch, hints) {
-      if (!hints.length) return true;
-      const descricao = getLancamentoDescricaoNormalizada(tarifaLaunch);
-      return hints.some((hint) => descricao.includes(hint));
-    }
-
-    function getTarifaStatusMeta(status) {
-      const lookup = {
-        ENCONTRADA: { label: "tarifa vinculada", icon: "✔", tone: "ok" },
-        AGRUPADA: { label: "tarifa agrupada", icon: "⚠", tone: "warn" },
-        NAO_ENCONTRADA: { label: "tarifa pendente", icon: "❌", tone: "danger" },
-        NAO_APLICA: { label: "+ tarifa", icon: "+", tone: "info" },
-      };
-      return lookup[status] || lookup.NAO_APLICA;
-    }
-
-    function recomputeTarifaMatches() {
-      state.lancamentos.forEach((lancamento) => {
-        lancamento.lancamento_relacionado_key = null;
-        lancamento.status_vinculo_tarifa = "NAO_APLICA";
-        lancamento.confianca_vinculo = "BAIXA";
-        lancamento.tarifa_esperada_valor = 0;
-      });
-
-      if (!state.lancamentos.length || !state.comprovantes.length) return;
-
-      state.lancamentos.forEach((lancamento) => {
-        if (lancamento.tipo_lancamento !== "PRINCIPAL") {
-          return;
-        }
-
-        const comprovante = getMatchedComprovante(lancamento);
-        if (!comprovante || !hasExpectedTarifa(comprovante) || !["PIX", "TED"].includes(getComprovanteOperationKind(comprovante))) {
-          return;
-        }
-
-        lancamento.tarifa_esperada_valor = parseFloat(comprovante.tarifa_valor || 0) || 0;
-
-        const occurrenceDate = comprovante.data_pagamento || lancamento.data_lancamento_extrato || lancamento.data;
-        const hints = getTarifaTypeHints(comprovante, lancamento);
-        const candidates = state.lancamentos.filter((candidate) => candidate !== lancamento);
-
-        const individual = candidates.find((candidate) => (
-          candidate.tipo_lancamento === "TARIFA"
-          && Math.abs((parseFloat((candidate.valor_original_do_banco ?? candidate.valor ?? 0))) - lancamento.tarifa_esperada_valor) <= 0.01
-          && getTarifaOccurrenceDate(candidate) === occurrenceDate
-          && matchesTarifaHint(candidate, hints)
-        ));
-
-        if (individual) {
-          lancamento.lancamento_relacionado_key = lancamentoKey(individual);
-          lancamento.status_vinculo_tarifa = "ENCONTRADA";
-          lancamento.confianca_vinculo = "ALTA";
-          return;
-        }
-
-        const grouped = candidates.find((candidate) => (
-          candidate.tipo_lancamento === "TARIFA_AGRUPADA"
-          && getTarifaOccurrenceDate(candidate) === occurrenceDate
-        ));
-
-        if (grouped) {
-          lancamento.lancamento_relacionado_key = lancamentoKey(grouped);
-          lancamento.status_vinculo_tarifa = "AGRUPADA";
-          lancamento.confianca_vinculo = "MEDIA";
-          return;
-        }
-
-        lancamento.status_vinculo_tarifa = "NAO_ENCONTRADA";
-        lancamento.confianca_vinculo = "BAIXA";
-      });
-    }
-
-    const MATCH_STOPWORDS = new Set([
-      "BB", "PIX", "TED", "DOC", "TARIFA", "PAGAMENTO", "TRANSFERENCIA",
-      "RECEBIDO", "ENVIADO", "BOLETO", "CONVENIO", "COMPROVANTE", "PARA", "DE", "DO", "DA",
-      "E", "QR", "CODE", "BANCO", "RECEITA", "FEDERAL",
-    ]);
-
-    function buildMatchTokens(value) {
-      return new Set(
-        normalizeDescricaoLancamento(value)
-          .split(" ")
-          .filter((token) => token && token.length >= 3 && !MATCH_STOPWORDS.has(token))
-      );
-    }
-
-    function documentsRelated(docA, docB) {
-      const a = normalizeDoc(docA);
-      const b = normalizeDoc(docB);
-      if (!a || !b) return false;
-      if (a === b) return true;
-
-      const shorter = a.length <= b.length ? a : b;
-      const longer = a.length > b.length ? a : b;
-      if (shorter.length < 5) return false;
-
-      return longer.startsWith(shorter) || longer.endsWith(shorter) || longer.includes(shorter);
-    }
-
-    function valuesClose(valueA, valueB, tolerance = 0.01) {
-      return Math.abs((parseFloat(valueA) || 0) - (parseFloat(valueB) || 0)) <= tolerance;
-    }
-
-    function getTypeHintScore(lancamento, comprovante) {
-      const descricao = getLancamentoDescricaoNormalizada(lancamento);
-      const tipo = String(comprovante?.tipo || "").toUpperCase();
-      if (!descricao || !tipo) return 0;
-      if (tipo.includes("PIX") && descricao.includes("PIX")) return 8;
-      if (tipo.includes("BOLETO") && (descricao.includes("BOLETO") || descricao.includes("TITULO"))) return 8;
-      if ((tipo.includes("TED") || tipo.includes("TRANSFER")) && (descricao.includes("TED") || descricao.includes("TRANSFER"))) return 8;
-      if (tipo.includes("CONVENIO") && (descricao.includes("CONVENIO") || descricao.includes("PAGAMENTO"))) return 8;
-      if (tipo.includes("DARF") && (descricao.includes("DARF") || descricao.includes("RECEITA"))) return 8;
-      return 0;
-    }
-
-    function scoreComprovanteForLancamento(lancamento, comprovante) {
-      const lancDoc = normalizeDoc(lancamento?.documento);
-      const compDoc = normalizeDoc(comprovante?.documento);
-      const sameDoc = documentsRelated(lancDoc, compDoc);
-
-      if (lancDoc && compDoc && !sameDoc) {
-        return Number.NEGATIVE_INFINITY;
-      }
-
-      const sameValue = valuesClose(lancamento?.valor_original_do_banco ?? lancamento?.valor, comprovante?.valor_total);
-      const sameDate = Boolean(lancamento?.data && comprovante?.data_pagamento && String(lancamento.data) === String(comprovante.data_pagamento));
-
-      const lancTokens = buildMatchTokens(lancamento?.historico);
-      const beneficiarioTokens = buildMatchTokens(comprovante?.beneficiario);
-      let overlap = 0;
-      beneficiarioTokens.forEach((token) => {
-        if (lancTokens.has(token)) overlap += 1;
-      });
-
-      if (!sameDoc && !sameValue) {
-        return Number.NEGATIVE_INFINITY;
-      }
-
-      if (!sameDoc && !sameDate && overlap === 0) {
-        return Number.NEGATIVE_INFINITY;
-      }
-
-      let score = 0;
-      if (sameDoc) score += lancDoc === compDoc ? 120 : 100;
-      if (sameValue) score += 35;
-      if (sameDate) score += 20;
-      if (overlap >= 2) score += 22;
-      else if (overlap === 1) score += 12;
-      score += getTypeHintScore(lancamento, comprovante);
-      return score;
-    }
-
-    function recomputeComprovanteMatches() {
-      state.comprovanteMatches = {};
-      if (!state.lancamentos.length || !state.comprovantes.length) return;
-
-      const candidates = [];
-      state.lancamentos.forEach((lancamento) => {
-        state.comprovantes.forEach((comprovante, compIndex) => {
-          const score = scoreComprovanteForLancamento(lancamento, comprovante);
-          if (score >= 48) {
-            candidates.push({
-              lancamentoKey: lancamentoKey(lancamento),
-              compIndex,
-              score,
-            });
-          }
-        });
-      });
-
-      candidates.sort((a, b) => b.score - a.score);
-
-      const usedLancamentos = new Set();
-      const usedComprovantes = new Set();
-      candidates.forEach((candidate) => {
-        if (usedLancamentos.has(candidate.lancamentoKey) || usedComprovantes.has(candidate.compIndex)) {
-          return;
-        }
-        state.comprovanteMatches[candidate.lancamentoKey] = state.comprovantes[candidate.compIndex];
-        usedLancamentos.add(candidate.lancamentoKey);
-        usedComprovantes.add(candidate.compIndex);
-      });
-    }
-
-    function getMatchedComprovante(lancamento) {
-      return state.comprovanteMatches[lancamentoKey(lancamento)] || null;
-    }
-
-    function getResolvedComponentes(l) {
-      const key = lancamentoKey(l);
-      if (state.componentes[key]?.length) {
-        return state.componentes[key].map(normalizeComponente).filter((item) => item.valor !== 0);
-      }
-      const comp = getMatchedComprovante(l);
-      return buildInitialComponentes(l, comp).map(normalizeComponente).filter((item) => item.valor !== 0);
-    }
-
-    function getLancamentoValores(l, componentes = null) {
-      const comps = componentes || getResolvedComponentes(l);
-      const valorOriginalBanco = parseFloat((l?.valor_original_do_banco ?? l?.valor ?? 0)) || 0;
-      const valorPrincipal = comps
-        .filter((item) => inferTipoComponente(item) === "PRINCIPAL")
-        .reduce((total, item) => total + parseFloat(item.valor || 0), 0);
-      const juros = comps
-        .filter((item) => inferTipoComponente(item) === "JUROS")
-        .reduce((total, item) => total + parseFloat(item.valor || 0), 0);
-      const multa = comps
-        .filter((item) => inferTipoComponente(item) === "MULTA")
-        .reduce((total, item) => total + parseFloat(item.valor || 0), 0);
-      const desconto = comps
-        .filter((item) => inferTipoComponente(item) === "DESCONTO")
-        .reduce((total, item) => total + Math.abs(parseFloat(item.valor || 0)), 0);
-      const tarifa = parseFloat(l?.tarifa_esperada_valor || 0) || 0;
-      const totalPago = valorPrincipal + juros + multa - desconto;
-      return {
-        valorOriginalBanco,
-        valorPrincipal: valorPrincipal || (!comps.length ? valorOriginalBanco : 0),
-        juros,
-        multa,
-        desconto,
-        tarifa,
-        valorOriginalCalculado: totalPago,
-        totalPago: totalPago || valorOriginalBanco,
-      };
-    }
-
     function naturezaBadge(nat) {
       // Inversão contábil: crédito bancário = débito contábil, e vice-versa
       if (nat === "CREDITO") return '<span class="extrato-nat extrato-nat--debito">Débito</span>';
@@ -5776,18 +4992,9 @@
       return '<span class="extrato-nat extrato-nat--indefinido">Indefinido</span>';
     }
 
-    function getComponentCodingSummary(l) {
-      const key = lancamentoKey(l);
-      const comps = (state.componentes[key] || []).map(normalizeComponente);
-      return comps.find((component) => component.codDebito || component.codCredito || component.codHistorico) || null;
-    }
-
     function hasRegra(l) {
       const r = state.regras[lancamentoKey(l)];
-      if (r && (r.codDebito || r.codCredito || r.codHistorico)) {
-        return true;
-      }
-      return Boolean(getComponentCodingSummary(l));
+      return r && (r.codDebito || r.codCredito || r.codHistorico);
     }
 
     function filteredRows() {
@@ -5796,19 +5003,19 @@
         const isSemRegraFilter = state.filtroNatureza === "SEM_REGRA";
         const natMatch = state.filtroNatureza === "TODOS" || isSemRegraFilter || l.natureza === state.filtroNatureza;
         const semRegraMatch = !isSemRegraFilter || !hasRegra(l);
-        const textMatch = !query || normalizeSearchTerm(`${l.historico} ${l.documento} ${l.descricao_normalizada || ""}`).includes(query);
+        const textMatch = !query || normalizeSearchTerm(l.historico + " " + l.documento).includes(query);
         return natMatch && semRegraMatch && textMatch;
       });
     }
 
     function regraCell(l) {
-      const r = state.regras[lancamentoKey(l)] || getComponentCodingSummary(l);
+      const r = state.regras[lancamentoKey(l)];
       if (!r || (!r.codDebito && !r.codCredito && !r.codHistorico)) {
         return '<td class="extrato-td-regra extrato-td-regra--vazia"><span class="extrato-regra-vazia">—</span></td>';
       }
       // Acha o nome da regra no regrasFlexi pelo id
-      const def = r.id ? state.regrasFlexi.find((x) => x.id === r.id) : null;
-      const nome = def?.nome ? escapeHtml(def.nome.slice(0, 40)) : "Lançamento";
+      const def = state.regrasFlexi.find((x) => x.id === r.id);
+      const nome = def?.nome ? escapeHtml(def.nome.slice(0, 40)) : "";
       const codigos = [
         r.codDebito ? `<span class="extrato-regra-cod extrato-regra-cod--d" title="Débito">D: ${escapeHtml(r.codDebito)}</span>` : "",
         r.codCredito ? `<span class="extrato-regra-cod extrato-regra-cod--c" title="Crédito">C: ${escapeHtml(r.codCredito)}</span>` : "",
@@ -5828,32 +5035,19 @@
       tbody.innerHTML = rows.map((l) => {
         const key = lancamentoKey(l);
         const comps = state.componentes[key] || [];
-        const badge = comps.length > 1
+        const badge = comps.length > 0
           ? `<span class="detalhe-badge">${comps.length}</span>`
           : "";
-        const comprovante = getMatchedComprovante(l);
-        const tarifaMeta = hasExpectedTarifa(comprovante) ? getTarifaStatusMeta(l.status_vinculo_tarifa) : null;
-        const tarifaBadge = tarifaMeta
-          ? `<span class="comprovante-badge comprovante-badge--${escapeHtml(tarifaMeta.tone)}" title="Tarifa do comprovante">
-              <span>${escapeHtml(tarifaMeta.icon)}</span>
-              <span>${escapeHtml(tarifaMeta.label)}</span>
-            </span>`
-          : "";
-        const compositionLabels = shouldUseComprovanteComposition(comprovante) ? getComprovanteDisplayBadges(comprovante) : [];
-        const compositionBadge = compositionLabels.length
-          ? `<span class="comprovante-badge comprovante-badge--info" title="Composição do pagamento">${escapeHtml(compositionLabels.join(" · "))}</span>`
+        const docKey = normalizeDoc(l.documento);
+        const compBadge = (docKey && state.comprovantes[docKey]?.itens?.length > 1)
+          ? `<span class="comprovante-badge" title="Comprovante vinculado">📎</span>`
           : "";
         return `
         <tr data-extrato-row data-natureza="${escapeHtml(l.natureza)}" data-linha-key="${escapeHtml(key)}" class="extrato-row-clickable" title="Clique para detalhar">
           <td class="extrato-td-date">${escapeHtml(formatDateBR(l.data))}</td>
-          <td class="extrato-td-hist">
-            <div class="extrato-hist-wrap">
-              <span class="extrato-hist-text">${escapeHtml(l.historico)}</span>
-              ${(badge || tarifaBadge || compositionBadge) ? `<span class="extrato-hist-indicators">${badge}${tarifaBadge}${compositionBadge}</span>` : ""}
-            </div>
-          </td>
+          <td class="extrato-td-hist">${escapeHtml(l.historico)}${badge}${compBadge}</td>
           <td class="extrato-td-doc">${escapeHtml(l.documento || "—")}</td>
-          <td class="extrato-td-valor text-right">${escapeHtml(formatCurrency(l.valor_original_do_banco ?? l.valor))}</td>
+          <td class="extrato-td-valor text-right">${escapeHtml(formatCurrency(l.valor))}</td>
           <td>${naturezaBadge(l.natureza)}</td>
           ${regraCell(l)}
         </tr>
@@ -5861,8 +5055,9 @@
       }).join("");
 
       // Totais
-      const totalC = state.lancamentos.filter((l) => l.natureza === "CREDITO").reduce((s, l) => s + parseFloat((l.valor_original_do_banco ?? l.valor ?? 0)), 0);
-      const totalD = state.lancamentos.filter((l) => l.natureza === "DEBITO").reduce((s, l) => s + parseFloat((l.valor_original_do_banco ?? l.valor ?? 0)), 0);
+      const visibleAll = state.filtroNatureza === "TODOS" ? state.lancamentos : rows;
+      const totalC = state.lancamentos.filter((l) => l.natureza === "CREDITO").reduce((s, l) => s + parseFloat(l.valor || 0), 0);
+      const totalD = state.lancamentos.filter((l) => l.natureza === "DEBITO").reduce((s, l) => s + parseFloat(l.valor || 0), 0);
       if (totalCreditoEl) totalCreditoEl.textContent = formatCurrency(totalC);
       if (totalDebitoEl) totalDebitoEl.textContent = formatCurrency(totalD);
       if (totalSaldoEl) totalSaldoEl.textContent = formatCurrency(totalC - totalD);
@@ -5882,26 +5077,6 @@
       });
     }
 
-    function buildExtratoExportFilename() {
-      const clienteSelecionado = state.clientes.find((cliente) => cliente.id === state.empresaId);
-      const empresaNome = String(state.extratoMeta?.empresa_nome || clienteSelecionado?.nome || "").replace(/\s+/g, " ").trim();
-      const empresaCnpj = String(maskDocument(state.extratoMeta?.empresa_cnpj || clienteSelecionado?.cpf_cnpj || "")).trim();
-
-      if (empresaNome && empresaCnpj) {
-        return `${empresaNome} - ${empresaCnpj}.xls`;
-      }
-
-      if (empresaNome) {
-        return `${empresaNome}.xls`;
-      }
-
-      if (empresaCnpj) {
-        return `${empresaCnpj}.xls`;
-      }
-
-      return "extrato_conciliacao.xls";
-    }
-
     function setActiveChip(value) {
       state.filtroNatureza = value;
       filterChips.forEach((chip) => {
@@ -5917,7 +5092,7 @@
 
     // ── Normalização de histórico ──────────────────────────────────────────
     function historicNormKey(historico) {
-      return normalizeDescricaoLancamento(historico);
+      return String(historico || "").trim().toLowerCase();
     }
 
     // ── Regras — integração com API ───────────────────────────────────────
@@ -5947,10 +5122,6 @@
             empresaId: r.empresa || null,   // null = regra global
           });
         });
-        // Recalcula o mapa de regras aplicadas do zero para refletir inclusões,
-        // exclusões e alterações de texto de referência.
-        state.regras = {};
-
         // Ordena: menor prioridade = aplica primeiro
         state.regrasFlexi.sort((a, b) => a.prioridade - b.prioridade);
         applyApiRulesToLancamentos();
@@ -5975,131 +5146,15 @@
     }
 
     function matchesRule(desc, textoRef, tipoComp) {
-      const ref = historicNormKey(textoRef);
-      if (!ref) return false;
+      const ref = textoRef.toLowerCase();
       if (tipoComp === "IGUAL") return desc === ref;
       if (tipoComp === "COMECA_COM") return desc.startsWith(ref);
       return desc.includes(ref); // CONTEM (padrão)
     }
 
-    function inferTipoComponente(component) {
-      const explicit = String(component?.tipoComponente || component?.tipo_componente || "").trim().toUpperCase();
-      if (explicit) return explicit;
-
-      const descricao = getNormalizedComponentDescription(component);
-      if (!descricao || descricao === "PRINCIPAL") return "PRINCIPAL";
-      if (descricao.includes("TARIFA")) return "TARIFA";
-      if (descricao.includes("JUROS")) return "JUROS";
-      if (descricao.includes("MULTA")) return "MULTA";
-      if (descricao.includes("DESCONTO") || descricao.includes("ABATIMENTO")) return "DESCONTO";
-      return "OUTROS";
-    }
-
-    function normalizeComponente(component) {
-      const valor = parseFloat(component?.valor || 0);
-      return {
-        descricao: String(component?.descricao || "").trim(),
-        valor: Number.isFinite(valor) ? valor : 0,
-        tipoComponente: inferTipoComponente(component),
-        codDebito: String(component?.codDebito || component?.conta_debito || "").trim(),
-        codCredito: String(component?.codCredito || component?.conta_credito || "").trim(),
-        codHistorico: String(component?.codHistorico || component?.codigo_historico || "").trim(),
-      };
-    }
-
-    function componentesFromComprovante(comp) {
-      return (comp?.itens || [])
-        .map((item) => normalizeComponente({
-          descricao: item?.descricao,
-          valor: item?.valor,
-        }))
-        .filter((item) => item.valor !== 0 && !isTarifaComponent(item));
-    }
-
-    function getDefaultCodigosLancamento(l) {
-      const key = lancamentoKey(l);
-      const nk = getLancamentoDescricaoNormalizada(l);
-      const regra = state.regras[key] || state.regrasMap[nk] || {};
-      const defaults = {
-        codDebito: regra.codDebito || "",
-        codCredito: regra.codCredito || "",
-        codHistorico: regra.codHistorico || "",
-      };
-
-      if (!defaults.codDebito && !defaults.codCredito && state.contasBancarias.length) {
-        const BANCO_NORM = {
-          bb: "banco do brasil",
-          bradesco: "bradesco",
-          amazonia: "amaz",
-          santander: "santander",
-          caixa: "caixa",
-          itau: "ita",
-          sicredi: "sicredi",
-          sicoob: "sicoob",
-          inter: "inter",
-          nubank: "nubank",
-          btg: "btg",
-        };
-        const bancoKey = (state.extratoMeta?.banco || "").toLowerCase().replace(/[^a-z]/g, "");
-        const bancoNorm = BANCO_NORM[bancoKey] || bancoKey;
-        const conta = state.contasBancarias.find(
-          (c) => c.banco && c.codigo_contabil && c.banco.toLowerCase().includes(bancoNorm)
-        );
-        if (conta) {
-          if (l.natureza === "DEBITO") {
-            defaults.codCredito = conta.codigo_contabil;
-          } else if (l.natureza === "CREDITO") {
-            defaults.codDebito = conta.codigo_contabil;
-          }
-        }
-      }
-
-      return defaults;
-    }
-
-    function buildInitialComponentes(l, comp) {
-      if (l?.tipo_lancamento && l.tipo_lancamento !== "PRINCIPAL") {
-        const defaults = getDefaultCodigosLancamento(l);
-        return [normalizeComponente({
-          descricao: l.tipo_lancamento === "TARIFA_AGRUPADA" ? "Tarifa agrupada" : "Tarifa",
-          tipoComponente: "OUTROS",
-          valor: l.valor_original_do_banco ?? l.valor,
-          ...defaults,
-        })];
-      }
-
-      const defaults = getDefaultCodigosLancamento(l);
-      const comprovanteComponentes = componentesFromComprovante(comp).map((item) => normalizeComponente({
-        ...defaults,
-        ...item,
-      }));
-
-      if (comprovanteComponentes.length) {
-        const principalIndex = comprovanteComponentes.findIndex((item) => historicNormKey(item.descricao) === "PRINCIPAL");
-        const targetIndex = principalIndex >= 0 ? principalIndex : (comprovanteComponentes.length === 1 ? 0 : -1);
-        if (targetIndex >= 0) {
-          const target = comprovanteComponentes[targetIndex];
-          if (!target.codDebito && !target.codCredito && !target.codHistorico) {
-            comprovanteComponentes[targetIndex] = normalizeComponente({
-              ...target,
-              ...defaults,
-            });
-          }
-        }
-        return comprovanteComponentes;
-      }
-
-      return [normalizeComponente({
-        descricao: "Principal",
-        tipoComponente: "PRINCIPAL",
-        valor: l.valor_original_do_banco ?? l.valor,
-        ...defaults,
-      })];
-    }
-
     function applyApiRulesToLancamentos() {
       state.lancamentos.forEach((l) => {
-        const desc = getLancamentoDescricaoNormalizada(l);
+        const desc = historicNormKey(l.historico);
         const nat = (l.natureza || "").toUpperCase();
         const regra = state.regrasFlexi.find((r) => {
           // Filtro por tipo de movimento
@@ -6130,14 +5185,8 @@
     const detalheHist = panel.querySelector("[data-detalhe-hist]");
     const detalheData = panel.querySelector("[data-detalhe-data]");
     const detalheDoc = panel.querySelector("[data-detalhe-doc]");
-    const detalheLabelValorPrincipal = panel.querySelector("[data-detalhe-label-valor-principal]");
-    const detalheLabelValorOriginal = panel.querySelector("[data-detalhe-label-valor-original]");
-    const detalheLabelTarifa = panel.querySelector("[data-detalhe-label-tarifa]");
-    const detalheValorPrincipal = panel.querySelector("[data-detalhe-valor-principal]");
-    const detalheValorOriginal = panel.querySelector("[data-detalhe-valor-original]");
-    const detalheTarifa = panel.querySelector("[data-detalhe-tarifa]");
+    const detalheValor = panel.querySelector("[data-detalhe-valor]");
     const detalheNatureza = panel.querySelector("[data-detalhe-natureza]");
-    const detalheComponentesTitle = panel.querySelector("[data-detalhe-componentes-title]");
     const detalheList = panel.querySelector("[data-detalhe-list]");
     const detalheEmpty = panel.querySelector("[data-detalhe-empty]");
     const detalheDistribuido = panel.querySelector("[data-detalhe-distribuido]");
@@ -6149,11 +5198,11 @@
     const detalheRegrasForm = panel.querySelector("[data-detalhe-regras-form]");
     const detalheRegrasError = panel.querySelector("[data-detalhe-regras-error]");
     const detalheRegrasOk = panel.querySelector("[data-detalhe-regras-ok]");
+    const detalheRegraSalva = panel.querySelector("[data-detalhe-regra-salva]");
+    const detalheRegraCodDebito = panel.querySelector("[data-detalhe-regra-cod-debito]");
+    const detalheRegraCodCredito = panel.querySelector("[data-detalhe-regra-cod-credito]");
+    const detalheRegraCodHistorico = panel.querySelector("[data-detalhe-regra-cod-historico]");
     const detalheComprovante = panel.querySelector("[data-detalhe-comprovante-info]");
-    const detalheComprovanteViewer = panel.querySelector("[data-detalhe-comprovante-viewer]");
-    const detalheComprovanteFrame = panel.querySelector("[data-detalhe-comprovante-frame]");
-    const detalheComprovanteOpen = panel.querySelector("[data-detalhe-comprovante-open]");
-    const detalheComprovanteViewerClose = panel.querySelector("[data-detalhe-comprovante-viewer-close]");
     const extrairXlsBtn = panel.querySelector("[data-extrato-extrair-xls]");
 
     // ── Regras Automáticas — refs ─────────────────────────────────────────
@@ -6177,6 +5226,15 @@
         getValue: (item) => String(item.codigo),
       });
     }
+    if (detalheRegrasForm) {
+      setupCombobox(detalheRegrasForm.elements.codDebito, () => window.__GM_PLANO_CONTAS__ || []);
+      setupCombobox(detalheRegrasForm.elements.codCredito, () => window.__GM_PLANO_CONTAS__ || []);
+      setupCombobox(detalheRegrasForm.elements.codHistorico, () => window.__GM_HISTORICOS__ || [], {
+        getLabel: (item) => `${item.codigo} \u2014 ${item.nome}`,
+        getValue: (item) => String(item.codigo),
+      });
+    }
+
     // ── Regras Automáticas — render e CRUD ───────────────────────────────
     const COMP_LABELS = { CONTEM: "Contém", IGUAL: "Igual", COMECA_COM: "Começa com" };
     const MOV_LABELS = { AMBOS: "Ambos", CREDITO: "Só crédito", DEBITO: "Só débito" };
@@ -6346,16 +5404,6 @@
           regrasAutoForm.hidden = true;
           regrasAutoForm.reset();
           await loadRegrasFromAPI();
-
-          if (state.importacao?.id) {
-            const payload = await apiRequest(session, `/conciliador-importacoes/${state.importacao.id}/transacoes/`);
-            state.lancamentos = normalizeLancamentos(payload);
-            recomputeComprovanteMatches();
-            recomputeTarifaMatches();
-            applyApiRulesToLancamentos();
-            updateCounts();
-            renderTable();
-          }
         } catch (err) {
           if (regrasAutoFormError) { regrasAutoFormError.textContent = err.message || "Falha ao salvar."; regrasAutoFormError.hidden = false; }
         } finally {
@@ -6364,141 +5412,16 @@
       });
     }
 
-    function resetDetalheSaveFeedback() {
-      if (detalheRegrasError) {
-        detalheRegrasError.textContent = "";
-        detalheRegrasError.hidden = true;
-      }
-      if (detalheRegrasOk) {
-        detalheRegrasOk.hidden = true;
-        detalheRegrasOk.style.display = "none";
-      }
-    }
-
-    function hideDetalheComprovanteViewer() {
-      if (typeof detalheComprovanteViewer?.close === "function" && detalheComprovanteViewer.open) {
-        detalheComprovanteViewer.close();
-      }
-      if (detalheComprovanteFrame) detalheComprovanteFrame.removeAttribute("src");
-      if (detalheComprovanteOpen) detalheComprovanteOpen.setAttribute("href", "#");
-      if (detalheComprovanteViewer) delete detalheComprovanteViewer.dataset.previewKey;
-    }
-
-    function getComprovantePreviewUrl(comp) {
-      const baseUrl = comp?._arquivoUrl || "";
-      if (!baseUrl) return "";
-
-      const page = Number(comp?.pagina || 0);
-      if (page > 0) {
-        return `${baseUrl}#page=${page}&view=FitH`;
-      }
-
-      return baseUrl;
-    }
-
-    function getComprovantePreviewKey(comp) {
-      return `${comp?._arquivoUrl || ""}::${comp?.pagina || ""}`;
-    }
-
-    function showDetalheComprovanteViewer(comp) {
-      const previewUrl = getComprovantePreviewUrl(comp);
-      if (!previewUrl || !detalheComprovanteViewer || !detalheComprovanteFrame || !detalheComprovanteOpen) return;
-      detalheComprovanteOpen.href = previewUrl;
-      detalheComprovanteFrame.src = previewUrl;
-      detalheComprovanteViewer.dataset.previewKey = getComprovantePreviewKey(comp);
-      if (!detalheComprovanteViewer.open && typeof detalheComprovanteViewer.showModal === "function") {
-        try {
-          detalheComprovanteViewer.showModal();
-          return;
-        } catch (_) {
-          // fallback abaixo
-        }
-      }
-      detalheComprovanteViewer.setAttribute("open", "open");
-    }
-
-    function getLinkedTarifaLaunch(lancamento) {
-      if (!lancamento?.lancamento_relacionado_key) return null;
-      return state.lancamentos.find((item) => lancamentoKey(item) === lancamento.lancamento_relacionado_key) || null;
-    }
-
-    function isLockedComposicaoMode(lancamento, comprovante) {
-      return Boolean(comprovante && (hasExpectedTarifa(comprovante) || shouldUseComprovanteComposition(comprovante) || lancamento?.tipo_lancamento !== "PRINCIPAL"));
-    }
-
-    function syncDetalheSummaryLabels(lancamento, comprovante, valores) {
-      const hasComposition = shouldUseComprovanteComposition(comprovante);
-      if (detalheLabelValorPrincipal) detalheLabelValorPrincipal.textContent = "Valor principal";
-      if (detalheLabelValorOriginal) detalheLabelValorOriginal.textContent = hasComposition ? "Total pago" : "Valor original";
-      if (detalheLabelTarifa) detalheLabelTarifa.textContent = hasExpectedTarifa(comprovante) ? "Tarifa esperada" : "Tarifa";
-      if (detalheComponentesTitle) {
-        if (hasComposition) detalheComponentesTitle.textContent = "Composição do pagamento";
-        else if (hasExpectedTarifa(comprovante)) detalheComponentesTitle.textContent = "Principal";
-        else detalheComponentesTitle.textContent = "Componentes";
-      }
-      if (detalheValorPrincipal) detalheValorPrincipal.textContent = formatCurrency(valores.valorPrincipal);
-      if (detalheValorOriginal) detalheValorOriginal.textContent = formatCurrency(hasComposition ? valores.totalPago : valores.valorOriginalBanco);
-      if (detalheTarifa) detalheTarifa.textContent = hasExpectedTarifa(comprovante) ? formatCurrency(valores.tarifa) : "—";
-    }
-
-    function renderDetalheComprovanteInfo(lancamento, comprovante) {
-      if (!detalheComprovante) return;
-
-      const hasRelevantInfo = Boolean(comprovante && (hasExpectedTarifa(comprovante) || shouldUseComprovanteComposition(comprovante)));
-      if (!hasRelevantInfo) {
-        detalheComprovante.hidden = true;
-        detalheComprovante.innerHTML = "";
-        hideDetalheComprovanteViewer();
-        return;
-      }
-
-      const tipoLabel = {
-        bb_boleto: "BB — Boleto",
-        bb_pix: "BB — PIX",
-        bb_ted: "BB — TED / Transferência",
-        bb_convenio: "BB — Pagamento Convênio",
-        bradesco_boleto: "Bradesco — Boleto",
-        darf: "Receita Federal — DARF",
-      }[comprovante.tipo] || comprovante.tipo;
-      const dataPag = comprovante.data_pagamento ? formatDateBR(comprovante.data_pagamento) : "—";
-      const benef = comprovante.beneficiario ? ` · ${escapeHtml(comprovante.beneficiario)}` : "";
-      const pageLabel = comprovante.pagina ? ` · Página ${escapeHtml(String(comprovante.pagina))}` : "";
-      const actions = [];
-
-      if (comprovante._arquivoUrl) {
-        actions.push('<button type="button" class="detalhe-comp-action" data-detalhe-comprovante-toggle>Abrir prévia</button>');
-      }
-
-      const linkedTarifa = getLinkedTarifaLaunch(lancamento);
-      if (hasExpectedTarifa(comprovante) && linkedTarifa) {
-        actions.push('<button type="button" class="detalhe-comp-action" data-detalhe-tarifa-launch>Ver lançamento da tarifa</button>');
-      }
-
-      let extraInfo = "";
-      if (hasExpectedTarifa(comprovante)) {
-        const statusMeta = getTarifaStatusMeta(lancamento.status_vinculo_tarifa);
-        extraInfo = `<span class="detalhe-comp-status detalhe-comp-status--${escapeHtml(statusMeta.tone)}">${escapeHtml(statusMeta.icon)} ${escapeHtml(statusMeta.label)}</span><span>Tarifa: ${escapeHtml(formatCurrency(comprovante.tarifa_valor))}</span>`;
-      } else if (shouldUseComprovanteComposition(comprovante)) {
-        const labels = getComprovanteDisplayBadges(comprovante).join(" · ");
-        extraInfo = `<span class="detalhe-comp-status detalhe-comp-status--info">Composição</span><span>${escapeHtml(labels || "Principal")}</span>`;
-      }
-
-      detalheComprovante.innerHTML =
-        `<span class="detalhe-comp-tag">Comprovante</span>` +
-        `<span>${escapeHtml(tipoLabel)}${benef}</span>` +
-        `<span>Pagamento: ${escapeHtml(dataPag)}${pageLabel}</span>` +
-        extraInfo +
-        actions.join("");
-      detalheComprovante.hidden = false;
-
-      const previewBtn = detalheComprovante.querySelector("[data-detalhe-comprovante-toggle]");
-      if (previewBtn && comprovante._arquivoUrl) {
-        previewBtn.addEventListener("click", () => showDetalheComprovanteViewer(comprovante));
-      }
-
-      const tarifaBtn = detalheComprovante.querySelector("[data-detalhe-tarifa-launch]");
-      if (tarifaBtn && linkedTarifa) {
-        tarifaBtn.addEventListener("click", () => openDetalhe(linkedTarifa));
+    function renderRegraSalva(r) {
+      if (!detalheRegraSalva) return;
+      const temRegra = r && (r.codDebito || r.codCredito || r.codHistorico);
+      if (temRegra) {
+        if (detalheRegraCodDebito) detalheRegraCodDebito.textContent = r.codDebito || "—";
+        if (detalheRegraCodCredito) detalheRegraCodCredito.textContent = r.codCredito || "—";
+        if (detalheRegraCodHistorico) detalheRegraCodHistorico.textContent = r.codHistorico || "—";
+        detalheRegraSalva.hidden = false;
+      } else {
+        detalheRegraSalva.hidden = true;
       }
     }
 
@@ -6506,31 +5429,93 @@
       if (!detalheDialog) return;
       const key = lancamentoKey(l);
       state.detalheKey = key;
-      hideDetalheComprovanteViewer();
 
       if (detalheHist) detalheHist.value = l.historico || "";
       if (detalheData) detalheData.textContent = formatDateBR(l.data) || "—";
       if (detalheDoc) detalheDoc.textContent = l.documento || "—";
+      if (detalheValor) detalheValor.textContent = formatCurrency(l.valor);
       if (detalheNatureza) detalheNatureza.innerHTML = naturezaBadge(l.natureza);
       if (detalheAddForm) detalheAddForm.reset();
       if (detalheAddError) { detalheAddError.textContent = ""; detalheAddError.hidden = true; }
 
       // ── Comprovante vinculado ──────────────────────────────────────────
-      const comp = getMatchedComprovante(l);
-      renderDetalheComprovanteInfo(l, comp);
+      const docKey = normalizeDoc(l.documento);
+      const comp = docKey ? state.comprovantes[docKey] : null;
 
-      if (!state.componentes[key]) {
-        state.componentes[key] = buildInitialComponentes(l, comp);
+      // Mostra bloco de info do comprovante
+      if (detalheComprovante) {
+        if (comp) {
+          const tipoLabel = {
+            bb_boleto: "BB — Boleto",
+            bb_pix: "BB — PIX",
+            bb_ted: "BB — TED / Transferência",
+            bb_convenio: "BB — Pagamento Convênio",
+            bradesco_boleto: "Bradesco — Boleto",
+            darf: "Receita Federal — DARF",
+          }[comp.tipo] || comp.tipo;
+          const dataPag = comp.data_pagamento ? formatDateBR(comp.data_pagamento) : "—";
+          const benef = comp.beneficiario ? ` · ${escapeHtml(comp.beneficiario)}` : "";
+          detalheComprovante.innerHTML =
+            `<span class="detalhe-comp-tag">📎 Comprovante</span>` +
+            `<span>${escapeHtml(tipoLabel)}${benef}</span>` +
+            `<span>Pagamento: ${escapeHtml(dataPag)}</span>`;
+          detalheComprovante.hidden = false;
+        } else {
+          detalheComprovante.hidden = true;
+          detalheComprovante.innerHTML = "";
+        }
       }
 
-      const valores = getLancamentoValores(l, state.componentes[key]);
-      syncDetalheSummaryLabels(l, comp, valores);
-
-      if (detalheAddForm) {
-        detalheAddForm.hidden = isLockedComposicaoMode(l, comp);
+      // Auto-popula componentes do comprovante se ainda não foram adicionados (só quando há itens além do Principal)
+      if (comp && comp.itens && comp.itens.length > 1 && !state.componentes[key]) {
+        state.componentes[key] = comp.itens
+          .filter((it) => parseFloat(it.valor || 0) !== 0)
+          .map((it) => ({ descricao: it.descricao, valor: parseFloat(it.valor || 0) }));
       }
 
-      resetDetalheSaveFeedback();
+      if (detalheRegrasForm) {
+        const nk = historicNormKey(l.historico);
+        const r = state.regras[key] || state.regrasMap[nk] || {};
+        detalheRegrasForm.elements.codDebito.value = r.codDebito || "";
+        detalheRegrasForm.elements.codCredito.value = r.codCredito || "";
+        detalheRegrasForm.elements.codHistorico.value = r.codHistorico || "";
+
+        // Pré-preenchimento automático: quando não há regra, usa o código contábil
+        // da conta bancária da empresa que corresponde ao banco do extrato.
+        // Inversão contábil: DÉBITO no extrato → lançamento CRÉDITO contábil (e vice-versa)
+        if (!r.codDebito && !r.codCredito && state.contasBancarias.length) {
+          // Mapa: valor do select de banco no conciliador → substring do nome da conta bancária
+          const BANCO_NORM = {
+            bb: "banco do brasil",
+            bradesco: "bradesco",
+            amazonia: "amaz",
+            santander: "santander",
+            caixa: "caixa",
+            itau: "ita",
+            sicredi: "sicredi",
+            sicoob: "sicoob",
+            inter: "inter",
+            nubank: "nubank",
+            btg: "btg",
+          };
+          const bancoKey = (state.extratoMeta?.banco || "").toLowerCase().replace(/[^a-z]/g, "");
+          const bancoNorm = BANCO_NORM[bancoKey] || bancoKey;
+          const conta = state.contasBancarias.find(
+            (c) => c.banco && c.codigo_contabil && c.banco.toLowerCase().includes(bancoNorm)
+          );
+          if (conta) {
+            if (l.natureza === "DEBITO") {
+              detalheRegrasForm.elements.codCredito.value = conta.codigo_contabil;
+            } else if (l.natureza === "CREDITO") {
+              detalheRegrasForm.elements.codDebito.value = conta.codigo_contabil;
+            }
+          }
+        }
+
+        renderRegraSalva(r);
+      }
+      if (detalheRegrasError) { detalheRegrasError.textContent = ""; detalheRegrasError.hidden = true; }
+      if (detalheRegrasOk) { detalheRegrasOk.hidden = true; detalheRegrasOk.style.display = "none"; }
 
       renderDetalheList();
 
@@ -6543,29 +5528,11 @@
 
     function closeDetalhe() {
       state.detalheKey = null;
-      hideDetalheComprovanteViewer();
       if (typeof detalheDialog?.close === "function" && detalheDialog.open) {
         detalheDialog.close();
       } else if (detalheDialog) {
         detalheDialog.removeAttribute("open");
       }
-    }
-
-    function syncDetalheListScrollState() {
-      if (!detalheList) return;
-
-      detalheList.classList.remove("is-scrollable");
-      detalheList.style.removeProperty("--detalhe-comp-list-max-height");
-
-      const items = Array.from(detalheList.querySelectorAll(".detalhe-comp-item"));
-      if (items.length <= 2) return;
-
-      const styles = window.getComputedStyle(detalheList);
-      const gap = parseFloat(styles.rowGap || styles.gap || "0") || 0;
-      const maxHeight = items.slice(0, 2).reduce((total, item) => total + item.getBoundingClientRect().height, 0) + gap;
-
-      detalheList.style.setProperty("--detalhe-comp-list-max-height", `${Math.ceil(maxHeight)}px`);
-      detalheList.classList.add("is-scrollable");
     }
 
     function renderDetalheList() {
@@ -6574,24 +5541,11 @@
       const l = state.lancamentos.find((x) => lancamentoKey(x) === key);
       if (!l) return;
 
-      const comprovante = getMatchedComprovante(l);
-      const lockedMode = isLockedComposicaoMode(l, comprovante);
-
-      const valorOriginal = parseFloat((l.valor_original_do_banco ?? l.valor ?? 0));
-      const comps = (state.componentes[key] || []).map(normalizeComponente);
-      if (state.componentes[key]) {
-        state.componentes[key] = comps;
-      }
-      const valores = getLancamentoValores(l, comps);
-      const totalDist = comps.reduce((s, c) => s + parseFloat(c.valor || 0), 0);
+      const valorOriginal = parseFloat(l.valor || 0);
+      const comps = state.componentes[key] || [];
+      const totalDist = comps.reduce((s, c) => s + c.valor, 0);
       const restante = valorOriginal - totalDist;
       const pct = valorOriginal > 0 ? Math.min(100, (totalDist / valorOriginal) * 100) : 0;
-
-      syncDetalheSummaryLabels(l, comprovante, valores);
-
-      if (detalheAddForm) {
-        detalheAddForm.hidden = lockedMode;
-      }
 
       if (detalheDistribuido) detalheDistribuido.textContent = formatCurrency(totalDist);
       if (detalheRestante) {
@@ -6602,83 +5556,31 @@
 
       if (!comps.length) {
         detalheList.innerHTML = '<li class="detalhe-componentes-empty" data-detalhe-empty>Nenhum componente adicionado ainda.</li>';
-        syncDetalheListScrollState();
         return;
       }
 
       detalheList.innerHTML = comps.map((c, i) => `
         <li class="detalhe-comp-item">
-          <div class="detalhe-comp-head">
-            <div class="detalhe-comp-summary">
-              <span class="detalhe-comp-desc">${escapeHtml(c.descricao)}</span>
-              <span class="detalhe-comp-valor">${escapeHtml(formatCurrency(c.tipoComponente === "DESCONTO" ? Math.abs(c.valor) : c.valor))}</span>
-            </div>
-            ${lockedMode ? "" : `<button type="button" class="detalhe-comp-remove" data-comp-idx="${i}" title="Remover" aria-label="Remover ${escapeHtml(c.descricao)}">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M18 6L6 18M6 6l12 12"/>
-              </svg>
-            </button>`}
-          </div>
-          <div class="detalhe-comp-grid">
-            <label class="detalhe-comp-field">
-              <span>Cód. Débito</span>
-              <input type="text" value="${escapeHtml(c.codDebito)}" placeholder="Ex: 1.1.01" data-comp-idx="${i}" data-comp-field="codDebito" autocomplete="off" />
-            </label>
-            <label class="detalhe-comp-field">
-              <span>Cód. Crédito</span>
-              <input type="text" value="${escapeHtml(c.codCredito)}" placeholder="Ex: 2.1.01" data-comp-idx="${i}" data-comp-field="codCredito" autocomplete="off" />
-            </label>
-            <label class="detalhe-comp-field">
-              <span>Cód. Histórico</span>
-              <input type="text" value="${escapeHtml(c.codHistorico)}" placeholder="Ex: H001" data-comp-idx="${i}" data-comp-field="codHistorico" autocomplete="off" />
-            </label>
-          </div>
+          <span class="detalhe-comp-desc">${escapeHtml(c.descricao)}</span>
+          <span class="detalhe-comp-valor">${escapeHtml(formatCurrency(c.valor))}</span>
+          <button type="button" class="detalhe-comp-remove" data-comp-idx="${i}" title="Remover" aria-label="Remover ${escapeHtml(c.descricao)}">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M18 6L6 18M6 6l12 12"/>
+            </svg>
+          </button>
         </li>
       `).join("");
 
-      syncDetalheListScrollState();
-
       detalheList.querySelectorAll("[data-comp-idx]").forEach((btn) => {
-        if (btn.matches("[data-comp-field]")) return;
         btn.addEventListener("click", () => {
           const idx = parseInt(btn.dataset.compIdx, 10);
           state.componentes[key].splice(idx, 1);
           if (!state.componentes[key].length) delete state.componentes[key];
-          resetDetalheSaveFeedback();
           renderDetalheList();
           renderTable();
         });
       });
-
-      detalheList.querySelectorAll("[data-comp-field]").forEach((input) => {
-        const idx = parseInt(input.dataset.compIdx, 10);
-        const field = input.dataset.compField;
-        input.addEventListener("input", () => {
-          if (!state.componentes[key]?.[idx]) return;
-          state.componentes[key][idx][field] = input.value;
-          resetDetalheSaveFeedback();
-        });
-      });
-
-      detalheList.querySelectorAll('[data-comp-field="codDebito"]').forEach((input) => {
-        setupCombobox(input, () => window.__GM_PLANO_CONTAS__ || []);
-      });
-      detalheList.querySelectorAll('[data-comp-field="codCredito"]').forEach((input) => {
-        setupCombobox(input, () => window.__GM_PLANO_CONTAS__ || []);
-      });
-      detalheList.querySelectorAll('[data-comp-field="codHistorico"]').forEach((input) => {
-        setupCombobox(input, () => window.__GM_HISTORICOS__ || [], {
-          getLabel: (item) => `${item.codigo} \u2014 ${item.nome}`,
-          getValue: (item) => String(item.codigo),
-        });
-      });
     }
-
-    window.addEventListener("resize", () => {
-      if (state.detalheKey) {
-        syncDetalheListScrollState();
-      }
-    });
 
     if (detalheClose) {
       detalheClose.addEventListener("click", closeDetalhe);
@@ -6687,16 +5589,6 @@
     if (detalheDialog) {
       detalheDialog.addEventListener("click", (e) => {
         if (e.target === detalheDialog) closeDetalhe();
-      });
-    }
-
-    if (detalheComprovanteViewerClose) {
-      detalheComprovanteViewerClose.addEventListener("click", hideDetalheComprovanteViewer);
-    }
-
-    if (detalheComprovanteViewer) {
-      detalheComprovanteViewer.addEventListener("click", (e) => {
-        if (e.target === detalheComprovanteViewer) hideDetalheComprovanteViewer();
       });
     }
 
@@ -6717,10 +5609,22 @@
         }
 
         const key = state.detalheKey;
+        const l = state.lancamentos.find((x) => lancamentoKey(x) === key);
+        const valorOriginal = parseFloat(l?.valor || 0);
+        const compsAtuais = state.componentes[key] || [];
+        const totalDist = compsAtuais.reduce((s, c) => s + c.valor, 0);
+
+        if (totalDist + valor > valorOriginal + 0.005) {
+          if (detalheAddError) {
+            detalheAddError.textContent = `Valor excede o restante (${formatCurrency(Math.max(0, valorOriginal - totalDist))}).`;
+            detalheAddError.hidden = false;
+          }
+          return;
+        }
+
         if (detalheAddError) detalheAddError.hidden = true;
         if (!state.componentes[key]) state.componentes[key] = [];
-        state.componentes[key].push(normalizeComponente({ descricao: desc, valor }));
-        resetDetalheSaveFeedback();
+        state.componentes[key].push({ descricao: desc, valor });
         detalheAddForm.reset();
         detalheAddForm.elements.descricao?.focus();
         renderDetalheList();
@@ -6729,65 +5633,132 @@
     }
 
     if (detalheRegrasForm) {
-      detalheRegrasForm.addEventListener("submit", (e) => {
+      detalheRegrasForm.addEventListener("submit", async (e) => {
         e.preventDefault();
         const key = state.detalheKey;
         if (!key) return;
-        const lancamento = state.lancamentos.find((item) => lancamentoKey(item) === key);
-        if (!lancamento) return;
-
-        const comps = (state.componentes[key] || [])
-          .map(normalizeComponente)
-          .filter((component) => component.descricao && component.valor !== 0);
-
-        if (!comps.length) {
-          if (detalheRegrasError) {
-            detalheRegrasError.textContent = "Adicione ao menos um componente antes de salvar.";
-            detalheRegrasError.hidden = false;
-          }
+        const codDebito = String(detalheRegrasForm.elements.codDebito?.value || "").trim();
+        const codCredito = String(detalheRegrasForm.elements.codCredito?.value || "").trim();
+        const codHistorico = String(detalheRegrasForm.elements.codHistorico?.value || "").trim();
+        if (!codDebito && !codCredito && !codHistorico) {
+          if (detalheRegrasError) { detalheRegrasError.textContent = "Preencha ao menos um código."; detalheRegrasError.hidden = false; }
           return;
         }
+        if (detalheRegrasError) { detalheRegrasError.textContent = ""; detalheRegrasError.hidden = true; }
 
-        const descricaoEditada = String(detalheHist?.value || lancamento.historico || "").trim() || lancamento.historico;
-        lancamento.historico = descricaoEditada;
-        lancamento.descricao_original = descricaoEditada;
-        lancamento.descricao_normalizada = normalizeDescricaoLancamento(descricaoEditada);
-        Object.assign(lancamento, classifyLancamentoTipo(lancamento));
+        const l = state.lancamentos.find((x) => lancamentoKey(x) === key);
+        if (!l) return;
 
-        state.componentes[key] = comps;
-        recomputeComprovanteMatches();
-        recomputeTarifaMatches();
-        state.regras = {};
-        applyApiRulesToLancamentos();
-        if (detalheRegrasError) {
-          detalheRegrasError.textContent = "";
-          detalheRegrasError.hidden = true;
-        }
-        renderDetalheList();
-        updateCounts();
-        renderTable();
+        const saveBtn = detalheRegrasForm.querySelector(".detalhe-regras-save-btn");
+        if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = "Salvando..."; }
 
-        if (detalheRegrasOk) {
-          detalheRegrasOk.hidden = false;
-          detalheRegrasOk.style.display = "flex";
-          setTimeout(() => {
-            if (detalheRegrasOk) {
-              detalheRegrasOk.hidden = true;
-              detalheRegrasOk.style.display = "none";
+        try {
+          // Garante escritorioId carregado
+          if (!state.escritorioId) {
+            const escsData = await apiRequest(session, "/escritorios/");
+            const escs = Array.isArray(escsData) ? escsData : (escsData?.results || []);
+            if (escs.length > 0) state.escritorioId = escs[0].id;
+          }
+          if (!state.escritorioId) {
+            throw new Error("Escritório não encontrado. Recarregue a página.");
+          }
+
+          const nk = historicNormKey(l.historico);
+          const existing = state.regrasMap[nk];
+          const nomeEditado = String(detalheHist?.value || l.historico || "").trim().slice(0, 255) || l.historico.slice(0, 255);
+          let savedRule;
+
+          if (existing?.id) {
+            // Atualiza regra existente
+            savedRule = await apiRequest(session, `/conciliador-regras/${existing.id}/`, {
+              method: "PATCH",
+              body: {
+                nome: nomeEditado,
+                conta_debito: codDebito,
+                conta_credito: codCredito,
+                codigo_historico: codHistorico,
+              },
+            });
+          } else {
+            // Cria nova regra
+            savedRule = await apiRequest(session, "/conciliador-regras/", {
+              method: "POST",
+              body: {
+                escritorio: state.escritorioId,
+                empresa: state.empresaId || undefined,
+                nome: nomeEditado,
+                texto_referencia: l.historico.slice(0, 255),
+                tipo_comparacao: "CONTEM",
+                conta_debito: codDebito,
+                conta_credito: codCredito,
+                codigo_historico: codHistorico,
+              },
+            });
+          }
+
+          // Atualiza estado local e aplica a todos lançamentos com mesmo histórico
+          const ruleData = { id: savedRule.id, codDebito, codCredito, codHistorico };
+          state.regrasMap[nk] = ruleData;
+          state.lancamentos.forEach((lc) => {
+            if (historicNormKey(lc.historico) === nk) {
+              state.regras[lancamentoKey(lc)] = { ...ruleData };
             }
-          }, 3000);
+          });
+
+          // Atualiza regrasFlexi com o nome editado para que regraCell e renderRegrasAutoList reflitam imediatamente
+          const flexiIdx = state.regrasFlexi.findIndex((x) => x.id === savedRule.id);
+          if (flexiIdx >= 0) {
+            state.regrasFlexi[flexiIdx] = {
+              ...state.regrasFlexi[flexiIdx],
+              nome: nomeEditado,
+              codDebito,
+              codCredito,
+              codHistorico,
+            };
+          } else {
+            state.regrasFlexi.push({
+              id: savedRule.id,
+              textoRef: l.historico.slice(0, 255),
+              tipoComp: savedRule.tipo_comparacao || "CONTEM",
+              tipoMov: savedRule.tipo_movimento || "AMBOS",
+              prioridade: savedRule.prioridade ?? 100,
+              nome: nomeEditado,
+              codDebito,
+              codCredito,
+              codHistorico,
+            });
+            state.regrasFlexi.sort((a, b) => a.prioridade - b.prioridade);
+          }
+
+          updateCounts();
+          renderRegrasAutoList();
+          renderTable();
+          renderRegraSalva(ruleData);
+
+          if (detalheRegrasOk) {
+            detalheRegrasOk.hidden = false;
+            detalheRegrasOk.style.display = "flex";
+            setTimeout(() => {
+              if (detalheRegrasOk) {
+                detalheRegrasOk.hidden = true;
+                detalheRegrasOk.style.display = "none";
+              }
+            }, 3000);
+          }
+        } catch (err) {
+          if (detalheRegrasError) {
+            detalheRegrasError.textContent = err.message || "Falha ao salvar a regra.";
+            detalheRegrasError.hidden = false;
+          }
+        } finally {
+          if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = "Salvar regra"; }
         }
       });
     }
 
     // Normaliza número de documento para matching com comprovantes (remove zeros à esquerda)
     function normalizeDoc(doc) {
-      const normalized = String(doc || "")
-        .toUpperCase()
-        .replace(/[^0-9A-Z]/g, "")
-        .trim();
-      const withoutLeadingZeros = normalized.replace(/^0+/, "");
-      return withoutLeadingZeros || normalized;
+      return String(doc || "").replace(/\./g, "").replace(/,/g, "").trim().replace(/^0+/, "") || "";
     }
 
     if (extrairXlsBtn) {
@@ -6796,60 +5767,60 @@
           alert("Biblioteca XLSX não carregada. Verifique sua conexão com a internet.");
           return;
         }
-        const rows = [["TIPO", "DESCRIÇÃO", "VALOR", "CÓD. DÉBITO", "CÓD. CRÉDITO", "CÓD. HISTÓRICO"]];
+        const rows = [["Data", "Conta Crédito", "Conta Débito", "Cód. Histórico", "Descrição", "Valor"]];
         state.lancamentos.forEach((l) => {
           const key = lancamentoKey(l);
           const r = state.regras[key] || {};
-          const comps = getResolvedComponentes(l);
+          const docKey = normalizeDoc(l.documento);
+          const comp = docKey ? state.comprovantes[docKey] : null;
 
-          if (l.tipo_lancamento === "TARIFA" || l.tipo_lancamento === "TARIFA_AGRUPADA") {
-            const tarifaCodes = comps[0] || {};
+          // Se há comprovante com múltiplos itens, expande em sub-linhas
+          if (comp && comp.itens && comp.itens.length > 1) {
+            // Linha principal com valor_total do comprovante
             rows.push([
-              l.tipo_lancamento,
-              getLancamentoDescricaoNormalizada(l),
-              parseFloat((l.valor_original_do_banco ?? l.valor ?? 0)),
-              tarifaCodes.codDebito || r.codDebito || "",
-              tarifaCodes.codCredito || r.codCredito || "",
-              tarifaCodes.codHistorico || r.codHistorico || "",
+              l.data || "",
+              r.codCredito || "",
+              r.codDebito || "",
+              r.codHistorico || "",
+              l.historico || "",
+              parseFloat(comp.valor_total || l.valor || 0),
             ]);
-            return;
-          }
-
-          if (comps.length) {
-            comps.forEach((item) => {
-              const tipo = getComponentExportType(item);
-              const descricao = tipo === "PRINCIPAL"
-                ? getLancamentoDescricaoNormalizada(l)
-                : (getNormalizedComponentDescription(item) || getLancamentoDescricaoNormalizada(l));
-              rows.push([
-                tipo,
-                descricao,
-                parseFloat(item.valor || 0),
-                item.codDebito || r.codDebito || "",
-                item.codCredito || r.codCredito || "",
-                item.codHistorico || r.codHistorico || "",
-              ]);
+            // Sub-linhas (apenas itens com valor != 0, excluindo "Principal" se quiser detalhar)
+            comp.itens.forEach((item) => {
+              const v = parseFloat(item.valor || 0);
+              if (v !== 0) {
+                rows.push([
+                  "",
+                  "",
+                  "",
+                  "",
+                  `  ${item.descricao}`,
+                  v,
+                ]);
+              }
             });
           } else {
+            // Sem comprovante ou apenas 1 item: linha simples
             rows.push([
-              "PRINCIPAL",
-              getLancamentoDescricaoNormalizada(l),
-              parseFloat((l.valor_original_do_banco ?? l.valor ?? 0)),
-              r.codDebito || "",
+              l.data || "",
               r.codCredito || "",
+              r.codDebito || "",
               r.codHistorico || "",
+              l.historico || "",
+              parseFloat(l.valor || 0),
             ]);
           }
         });
         const ws = window.XLSX.utils.aoa_to_sheet(rows);
+        // Formata coluna Valor como número
         const range = window.XLSX.utils.decode_range(ws["!ref"]);
         for (let R = 1; R <= range.e.r; R++) {
-          const cell = ws[window.XLSX.utils.encode_cell({ r: R, c: 2 })];
+          const cell = ws[window.XLSX.utils.encode_cell({ r: R, c: 5 })];
           if (cell) cell.z = "#,##0.00";
         }
         const wb = window.XLSX.utils.book_new();
         window.XLSX.utils.book_append_sheet(wb, ws, "Extrato");
-        window.XLSX.writeFile(wb, buildExtratoExportFilename(), { bookType: "xls" });
+        window.XLSX.writeFile(wb, "extrato_conciliacao.xlsx");
       });
     }
 
@@ -7001,12 +5972,7 @@
           }
         }
 
-        state.lancamentos = normalizeLancamentos(payload.lancamentos);
-        state.componentes = {};
-        state.detalheKey = null;
-        releaseComprovanteFileUrls();
-        state.comprovantes = [];
-        state.comprovanteMatches = {};
+        state.lancamentos = payload.lancamentos || [];
 
         // Filtra apenas lançamentos do mês do extrato: do dia 2 ao último dia do mês
         // Usa periodo_inicio do payload para determinar o mês de referência
@@ -7053,43 +6019,6 @@
           conta: payload.conta || "",
         };
 
-        // Atualiza o select do banco com o banco detectado
-        const bancoSelect = form.elements.namedItem("banco");
-        if (bancoSelect && payload.banco && payload.banco !== "auto") {
-          const detectedBank = String(payload.banco).toLowerCase().trim();
-          const normalizedBank = normalizeBankValue(detectedBank);
-          let foundOption = null;
-          
-          // Palavras-chave do banco detectado (ex: "bradesco" -> ["bradesco", "net", "empresa"])
-          const bankKeywords = normalizedBank.split(/\s+/).filter(Boolean);
-          
-          // Tenta encontrar a opção pelo value ou texto
-          for (const opt of bancoSelect.options) {
-            if (!opt.value || opt.value === "auto") continue;
-            
-            const optText = opt.textContent.toLowerCase();
-            const optValue = opt.value.toLowerCase();
-            const optNormalized = normalizeBankValue(optValue);
-            
-            // Compara palavras-chave contra valor opções
-            const matchKeywords = bankKeywords.filter(kw => 
-              optValue.includes(kw) || optText.includes(kw) || optNormalized.includes(kw)
-            );
-            
-            // Se tiver pelo menos uma palavra-chave que matches
-            if (matchKeywords.length > 0) {
-              foundOption = opt;
-              break;
-            }
-          }
-          
-          if (foundOption) {
-            bancoSelect.value = foundOption.value;
-          }
-        }
-
-        recomputeComprovanteMatches();
-        recomputeTarifaMatches();
         updateCounts();
         setActiveChip("TODOS");
 
@@ -7548,7 +6477,7 @@
       const hasRole = session.roles.includes(CONFIG.keycloak.requiredRole);
       sessionBadge.className = hasRole ? "status-ok" : "status-error";
       sessionBadge.innerHTML = hasRole 
-        ? `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3 4 6.5v5.4c0 4.4 3.1 7.9 8 9.1 4.9-1.2 8-4.7 8-9.1V6.5L12 3Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="m8.8 12 2.1 2.1 4.4-4.7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg> Acesso autorizado`
+        ? `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg> Acesso liberado`
         : `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg> Sem acesso`;
     }
 
@@ -7750,7 +6679,6 @@
     try {
       runPanelSetup("navegação", setupPanelNavigation);
       runPanelSetup("clientes", () => setupClientsCrud(session));
-      runPanelSetup("bancos", () => setupBancosCrud(session));
       runPanelSetup("perfis", () => setupPerfisCrud(session));
       runPanelSetup("contabilidade", () => setupContabilidadeCrud(session));
       runPanelSetup("extrato", () => setupExtratoImport(session));
@@ -7758,14 +6686,9 @@
       setPanelView(getInitialPanelView(), { updateUrl: false });
 
       if (sessionStatus) {
-        const hasRequiredRole = session.roles.includes(CONFIG.keycloak.requiredRole);
-        const verifiedIcon = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3 4 6.5v5.4c0 4.4 3.1 7.9 8 9.1 4.9-1.2 8-4.7 8-9.1V6.5L12 3Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="m8.8 12 2.1 2.1 4.4-4.7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
-        const authorizedLabel = setupErrors.length
-          ? `${verifiedIcon} Acesso autorizado · ${setupErrors.length} módulo(s) com erro`
-          : `${verifiedIcon} Acesso autorizado`;
-
-        sessionStatus.innerHTML = hasRequiredRole ? authorizedLabel : "Sem acesso";
-        sessionStatus.title = hasRequiredRole ? `Você possui a role ${CONFIG.keycloak.requiredRole}` : "Role obrigatória ausente.";
+        sessionStatus.textContent = setupErrors.length
+          ? `USER-GM OK · ${setupErrors.length} módulo(s) com erro`
+          : (session.roles.includes(CONFIG.keycloak.requiredRole) ? "USER-GM OK" : "SEM USER-GM");
       }
 
       if (logoutButton) {
