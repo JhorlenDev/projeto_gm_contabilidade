@@ -27,6 +27,7 @@ from .models import (
     TransacaoImportada,
     TipoArquivo,
     TipoComparacao,
+    SessaoConciliacao,
     TipoComponenteLancamento,
     TipoContaCliente,
     TipoLancamento,
@@ -93,6 +94,7 @@ class ClienteSerializer(serializers.ModelSerializer):
             "email",
             "ie",
             "telefone",
+            "agencia",
             "conta_corrente",
             "conta_contabil",
             "data_inicio",
@@ -107,6 +109,7 @@ class ClienteSerializer(serializers.ModelSerializer):
             "ie": {"required": False, "allow_blank": True},
             "email": {"required": False, "allow_blank": True},
             "telefone": {"required": False, "allow_blank": True},
+            "agencia": {"required": False, "allow_blank": True},
             "conta_corrente": {"required": False, "allow_blank": True},
             "conta_contabil": {"required": False, "allow_blank": True},
             "data_inicio": {"required": False},
@@ -128,6 +131,9 @@ class ClienteSerializer(serializers.ModelSerializer):
         return str(value or "").strip()
 
     def validate_telefone(self, value):
+        return str(value or "").strip()
+
+    def validate_agencia(self, value):
         return str(value or "").strip()
 
     def validate_conta_corrente(self, value):
@@ -1022,3 +1028,22 @@ class BancoSerializer(serializers.ModelSerializer):
         if request is not None:
             return request.build_absolute_uri(obj.logo.url)
         return obj.logo.url
+
+class SessaoConciliacaoSerializer(serializers.ModelSerializer):
+    empresa_nome = serializers.CharField(source="empresa.nome", read_only=True)
+
+    class Meta:
+        model = SessaoConciliacao
+        fields = [
+            "id",
+            "empresa",
+            "empresa_nome",
+            "data_inicio",
+            "atualizado_em",
+            "status",
+            "banco",
+            "arquivo_nome",
+            "dados_lancamentos",
+            "dados_comprovantes",
+        ]
+        read_only_fields = ["id", "data_inicio", "atualizado_em"]

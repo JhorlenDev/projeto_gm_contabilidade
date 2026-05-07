@@ -101,6 +101,7 @@ class Cliente(models.Model):
     email = models.EmailField(blank=True, default="")
     ie = models.CharField(max_length=32, blank=True, default="")
     telefone = models.CharField(max_length=20, blank=True, default="")
+    agencia = models.CharField(max_length=20, blank=True, default="")
     conta_corrente = models.CharField(max_length=30, blank=True, default="", verbose_name="Conta corrente")
     conta_contabil = models.CharField(max_length=20, blank=True, default="", verbose_name="Conta contábil (cód. banco)")
     data_inicio = models.DateField(default=timezone.localdate)
@@ -594,3 +595,26 @@ class KeycloakUser(models.Model):
 
     def __str__(self):
         return self.nome or self.email or self.sub
+
+
+class SessaoConciliacao(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    escritorio = models.ForeignKey(Escritorio, on_delete=models.CASCADE, related_name="sessoes_conciliacao")
+    empresa = models.ForeignKey(Cliente, on_delete=models.CASCADE, related_name="sessoes_conciliacao")
+    data_inicio = models.DateTimeField(auto_now_add=True)
+    atualizado_em = models.DateTimeField(auto_now=True)
+    status = models.CharField(
+        max_length=20, 
+        choices=[('EM_ANDAMENTO', 'Em Andamento'), ('CONCLUIDA', 'Concluída')], 
+        default='EM_ANDAMENTO'
+    )
+    banco = models.CharField(max_length=60, blank=True, default="")
+    arquivo_nome = models.CharField(max_length=255, blank=True, default="")
+    dados_lancamentos = models.JSONField(default=list, blank=True)
+    dados_comprovantes = models.JSONField(default=list, blank=True)
+
+    class Meta:
+        ordering = ["-atualizado_em"]
+
+    def __str__(self):
+        return f"Sessão {self.empresa.nome} ({self.status})"

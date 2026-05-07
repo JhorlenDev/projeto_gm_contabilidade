@@ -17,6 +17,7 @@ from .api_views import (
     PlanoContasView,
     RegraConciliadorViewSet,
     TransacaoImportadaViewSet,
+    SessaoConciliacaoViewSet,
 )
 from .views import TesteView
 
@@ -31,6 +32,7 @@ router.register(r"conciliador-importacoes", ImportacaoExtratoViewSet, basename="
 router.register(r"conciliador-transacoes", TransacaoImportadaViewSet, basename="conciliador-transacoes")
 router.register(r"conciliador-regras", RegraConciliadorViewSet, basename="conciliador-regras")
 router.register(r"conciliador-perfis", PerfilConciliacaoViewSet, basename="conciliador-perfis")
+router.register(r"sessoes-conciliacao", SessaoConciliacaoViewSet, basename="sessoes-conciliacao")
 
 urlpatterns = [
     path("", include(router.urls)),

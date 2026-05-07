@@ -43,6 +43,7 @@ from .models import (
     TarifaVinculoAuditoria,
     TipoComponenteLancamento,
     TransacaoImportada,
+    SessaoConciliacao,
 )
 from .serializers import (
     BancoSerializer,
@@ -56,6 +57,7 @@ from .serializers import (
     PlanoContasSerializer,
     RegraConciliadorSerializer,
     TransacaoImportadaSerializer,
+    SessaoConciliacaoSerializer,
 )
 
 
@@ -1025,3 +1027,25 @@ class HistoricoContabilView(APIView):
             return Response({"detail": "Não encontrado."}, status=status.HTTP_404_NOT_FOUND)
         obj.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class SessaoConciliacaoViewSet(viewsets.ModelViewSet):
+    serializer_class = SessaoConciliacaoSerializer
+    authentication_classes = [KeycloakJWTAuthentication]
+    permission_classes = [HasUserGMRole]
+
+    def get_queryset(self):
+        qs = SessaoConciliacao.objects.all()
+        cliente = self.request.query_params.get("cliente")
+        if cliente:
+            qs = qs.filter(empresa_id=cliente)
+            
+        estado = self.request.query_params.get("status")
+        if estado:
+            qs = qs.filter(status=estado)
+            
+        return qs.order_by("-atualizado_em")
+
+    def perform_create(self, serializer):
+        escritorio = Escritorio.objects.first()
+        serializer.save(escritorio=escritorio)

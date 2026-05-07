@@ -99,6 +99,19 @@ CORS_ALLOWED_ORIGINS = config(
     cast=Csv(),
 )
 
+CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOW_HEADERS = [
+    "accept",
+    "accept-encoding",
+    "authorization",
+    "content-type",
+    "dnt",
+    "origin",
+    "user-agent",
+    "x-csrftoken",
+    "x-requested-with",
+]
+
 KEYCLOAK_REALM_URL = config("KEYCLOAK_REALM_URL", default="").rstrip("/")
 KEYCLOAK_CLIENT_ID = config("KEYCLOAK_CLIENT_ID", default="")
 KEYCLOAK_JWKS_URL = config("KEYCLOAK_JWKS_URL", default="").rstrip("/")
