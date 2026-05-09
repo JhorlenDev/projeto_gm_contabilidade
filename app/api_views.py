@@ -25,6 +25,7 @@ from services.conciliador import (
 from services.keycloak import KeycloakConfigurationError, KeycloakTokenError, exchange_code_for_token
 from services.pdf_parser import process_extrato_pdf
 from services.parsers.comprovante import parse_comprovante_pdf
+from services.parsers.nfse_prefeitura import parse_nfse_prefeitura
 
 from .models import (
     Banco,
@@ -970,6 +971,109 @@ class PlanoContasView(APIView):
             return Response({"detail": "Não encontrado."}, status=status.HTTP_404_NOT_FOUND)
         obj.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class NfsePrefeituraView(APIView):
+    """
+    POST /api/nfse-prefeitura/
+    Recebe um PDF de NFS-e da prefeitura e extrai os dados de cada nota.
+
+    Form fields:
+      - arquivo: PDF da NFS-e (pode conter múltiplas páginas/notas)
+    """
+    authentication_classes = [KeycloakJWTAuthentication]
+    permission_classes = [HasUserGMRole]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request, *args, **kwargs):
+        arquivo = request.FILES.get("arquivo")
+        if not arquivo:
+            return Response({"detail": "Campo 'arquivo' é obrigatório."}, status=status.HTTP_400_BAD_REQUEST)
+
+        ext = arquivo.name.rsplit(".", 1)[-1].lower() if "." in arquivo.name else ""
+        if ext != "pdf":
+            return Response({"detail": "Apenas arquivos PDF são suportados."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Modo debug: retorna o texto bruto extraído por página
+        if request.query_params.get("debug") == "1":
+            import io
+            try:
+                from pypdf import PdfReader
+                from services.parsers.base import _read_file_bytes
+                raw = _read_file_bytes(arquivo)
+                reader = PdfReader(io.BytesIO(raw))
+                paginas = [{"pagina": i + 1, "texto": (p.extract_text() or "")} for i, p in enumerate(reader.pages)]
+                return Response({"total_paginas": len(paginas), "paginas": paginas})
+            except Exception as exc:
+                return Response({"detail": str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        resultado = parse_nfse_prefeitura(arquivo)
+
+        if not resultado.success:
+            return Response(
+                {"detail": resultado.erros[0] if resultado.erros else "Erro ao processar PDF."},
+                status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
+
+        # Carrega regras do conciliador se empresa_id foi enviado
+        empresa_id = request.data.get("empresa_id") or request.query_params.get("empresa_id")
+        escritorio_id = request.data.get("escritorio_id") or request.query_params.get("escritorio_id")
+        regras = []
+        if empresa_id:
+            try:
+                empresa = Cliente.objects.get(pk=empresa_id)
+                qs = RegraConciliador.objects.filter(
+                    ativo=True,
+                    aplicar_automatico=True,
+                )
+                if escritorio_id:
+                    qs = qs.filter(escritorio_id=escritorio_id).filter(
+                        Q(empresa__isnull=True) | Q(empresa=empresa)
+                    )
+                else:
+                    qs = qs.filter(empresa=empresa)
+                regras = list(qs.order_by("prioridade", "nome"))
+            except Cliente.DoesNotExist:
+                pass
+
+        def _match_regra(nome_tomador: str, cpf_tomador: str):
+            """Retorna a primeira regra que bate com o nome ou CPF do tomador."""
+            target = normalize_text(nome_tomador + " " + cpf_tomador)
+            for regra in regras:
+                ref = normalize_text(regra.texto_referencia)
+                if not ref:
+                    continue
+                if regra.tipo_comparacao == "IGUAL":
+                    if target == ref or normalize_text(cpf_tomador) == ref:
+                        return regra
+                elif regra.tipo_comparacao == "COMECA_COM":
+                    if target.startswith(ref):
+                        return regra
+                else:  # CONTEM
+                    if ref in target:
+                        return regra
+            return None
+
+        notas = []
+        for n in resultado.notas:
+            regra = _match_regra(n.nome_tomador, n.cpf_tomador)
+            notas.append({
+                "numero_nota": n.numero_nota,
+                "data_emissao": n.data_emissao.isoformat() if n.data_emissao else None,
+                "data_pagamento": n.data_pagamento.isoformat() if n.data_pagamento else None,
+                "nome_tomador": n.nome_tomador,
+                "cpf_tomador": n.cpf_tomador,
+                "valor": str(n.valor),
+                "tipo_pagamento": n.tipo_pagamento,
+                "regra_id": str(regra.id) if regra else None,
+                "regra_nome": regra.nome if regra else None,
+                "conta_debito": regra.conta_debito if regra else "",
+                "conta_credito": regra.conta_credito if regra else "",
+                "codigo_historico": regra.codigo_historico if regra else "",
+                "categoria": regra.categoria if regra else "",
+            })
+
+        return Response({"total": len(notas), "notas": notas})
 
 
 class HistoricoContabilView(APIView):

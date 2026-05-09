@@ -13,6 +13,7 @@ from .api_views import (
     HistoricoContabilView,
     ImportacaoExtratoViewSet,
     KeycloakTokenExchangeView,
+    NfsePrefeituraView,
     PerfilConciliacaoViewSet,
     PlanoContasView,
     RegraConciliadorViewSet,
@@ -45,5 +46,6 @@ urlpatterns = [
     path("plano-contas/<uuid:pk>/", PlanoContasView.as_view(), name="plano-contas-detail"),
     path("historico-contabil/", HistoricoContabilView.as_view(), name="historico-contabil"),
     path("historico-contabil/<uuid:pk>/", HistoricoContabilView.as_view(), name="historico-contabil-detail"),
+    path("nfse-prefeitura/", NfsePrefeituraView.as_view(), name="nfse-prefeitura"),
     path("teste/", TesteView.as_view(), name="teste"),
 ]
