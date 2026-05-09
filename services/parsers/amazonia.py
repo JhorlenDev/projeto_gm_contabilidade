@@ -49,11 +49,48 @@ class AmazoniaExtratoParser:
         header = self._extract_header(full_text)
         lancamentos = self._extract_lancamentos(lines)
 
+        # Injetar Saldo Anterior e Saldo Final como lançamentos especiais
+        ref_date = header.periodo_inicio
+        if lancamentos and not ref_date:
+            ref_date = lancamentos[0].data
+
+        if ref_date and header.saldo is not None and str(header.dados_brutos.get("saldo_anterior", "")) != "0":
+            lancamentos.insert(0, LancamentoExtrato(
+                linha_origem=0,
+                pagina=1,
+                data=ref_date,
+                descricao_original="Saldo Disponível Inicial",
+                documento="",
+                valor=header.saldo,
+                natureza_inferida="SALDO_ANTERIOR",
+                saldo=header.saldo,
+                linha_original="",
+            ))
+
+        if lancamentos:
+            ultimo = next((l for l in reversed(lancamentos) if l.natureza_inferida not in ("SALDO_ANTERIOR", "SALDO_FINAL")), None)
+            if ultimo and ultimo.saldo is not None:
+                saldo_final = ultimo.saldo
+                # Atualizar header.saldo para refletir o saldo final real
+                header.saldo = saldo_final
+                header.dados_brutos["saldo_final"] = str(saldo_final)
+                lancamentos.append(LancamentoExtrato(
+                    linha_origem=9999,
+                    pagina=1,
+                    data=ultimo.data or ref_date,
+                    descricao_original="Saldo Final",
+                    documento="",
+                    valor=saldo_final,
+                    natureza_inferida="SALDO_FINAL",
+                    saldo=saldo_final,
+                    linha_original="",
+                ))
+
         return ExtratoResult(
             success=True,
             header=header,
             lancamentos=lancamentos,
-            total_lancamentos=len(lancamentos),
+            total_lancamentos=len([l for l in lancamentos if l.natureza_inferida not in ("SALDO_ANTERIOR", "SALDO_FINAL")]),
         )
 
     def _extract_header(self, text: str) -> ExtratoHeader:
@@ -76,6 +113,15 @@ class AmazoniaExtratoParser:
         m = re.search(r"Saldo\s+Dispon[íi]vel\s+Inicial[:\s]*([\d.,]+)", text, re.IGNORECASE)
         if m:
             h.saldo = _parse_brl_decimal(m.group(1))
+            h.dados_brutos["saldo_anterior"] = str(h.saldo)
+
+        m = re.search(r"Total\s+de\s+d[eé]bito[:\s]*([\d.,]+)", text, re.IGNORECASE)
+        if m:
+            h.dados_brutos["total_debito"] = str(_parse_brl_decimal(m.group(1)))
+
+        m = re.search(r"Total\s+de\s+cr[eé]dito[:\s]*([\d.,]+)", text, re.IGNORECASE)
+        if m:
+            h.dados_brutos["total_credito"] = str(_parse_brl_decimal(m.group(1)))
 
         # Período da referência (ex: "01 / 2024")
         m = re.search(r"(\d{2})\s*/\s*(\d{4})", text)
@@ -99,7 +145,10 @@ class AmazoniaExtratoParser:
 
         _SKIP_RE = re.compile(
             r"^(Total\s+de|Data\s+da|Hora\s+da|Emitido|Para\s+simples|Vencto|Tipo\s+Conta"
-            r"|DATA\s+NR|Saldo\s+Dispon|PD_CCOR|GESOP)",
+            r"|DATA\s*$|DATA\s+NR|NR\s+DOC|HISTÓRICO|VALOR\s+LANCTO|D/C\s*$|SALDO\s*$"
+            r"|Saldo\s+Dispon|PD_CCOR|GESOP|Agência\s*:|Conta\s*:|Titular\s*:|Limite\s*:"
+            r"|IBAN_|Emitir\s+Extrato|\d{2}\s*/\s*\d{4}\s*$|1\s+de\s+\d|Extrato_mes"
+            r"|DP\s+PJ|LTDA\s*$)",
             re.IGNORECASE,
         )
 
@@ -107,6 +156,9 @@ class AmazoniaExtratoParser:
         current_date: str | None = None
         current_first: str = ""
         current_extra: list[str] = []
+        block_done = False  # True quando já coletamos SALDO (6ª linha após DATA)
+
+        _DC_LINE_RE = re.compile(r"^[DC]$")
 
         for line in lines:
             if _SKIP_RE.search(line):
@@ -118,8 +170,17 @@ class AmazoniaExtratoParser:
                 current_date = m.group(1)
                 current_first = (m.group(2) or "").strip()
                 current_extra = []
-            elif current_date is not None:
+                block_done = False
+            elif current_date is not None and not block_done:
                 current_extra.append(line)
+                # Um bloco BASA tem exatamente: NR_DOC, HISTÓRICO, VALOR, D/C, SALDO
+                # Quando a última linha acumulada é o SALDO (linha após D/C), o bloco está completo.
+                # Detectamos: penúltima linha é "D" ou "C" e última é um número decimal.
+                if len(current_extra) >= 4:
+                    penultima = current_extra[-2] if len(current_extra) >= 2 else ""
+                    ultima = current_extra[-1]
+                    if _DC_LINE_RE.match(penultima) and self._VALUE_RE.fullmatch(ultima.lstrip("-")):
+                        block_done = True
 
         if current_date is not None:
             blocks.append((current_date, current_first, current_extra))
