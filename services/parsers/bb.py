@@ -31,6 +31,10 @@ class BancoBrasilExtratoParser:
     _DATE_RE = re.compile(r"^(\d{2}/\d{2}/\d{4})\s+(\d{4})\s+(\d+)\s+(\d+)\s+(.+)$")
     _VALUE_DC_RE = re.compile(r"([\d.]+,\d{2})\s+([CD])\s*$")
     _VALUE_DC_INLINE = re.compile(r"([\d.]+,\d{2})\s+([CD])\b")
+    _ALL_VALUES_RE = re.compile(r"([\d.]+,\d{2})\s+([CD])")
+    _SALDO_ANT_RE = re.compile(r"Saldo\s+Anterior", re.IGNORECASE)
+    _BB_RENDE_RE = re.compile(r"BB\s+Rende", re.IGNORECASE)
+    _SALDO_FINAL_RE = re.compile(r"S\s*A\s*L\s*D\s*O", re.IGNORECASE)
 
     def parse(self, uploaded_file) -> ExtratoResult:
         try:
@@ -105,7 +109,7 @@ class BancoBrasilExtratoParser:
 
         _SKIP_RE = re.compile(
             r"^(Dt\.\s+balancete|Lançamentos|Cliente\s*-|Agência|Conta corrente|Per[íi]odo|"
-            r"Consultas\s*-|G\d{15}|Saldo\s+Anterior|S\s*A\s*L\s*D\s*O|Transação\s+efetuada"
+            r"Consultas\s*-|G\d{15}|Transação\s+efetuada"
             r"|Serviço\s+de\s+Atendimento|Para\s+deficientes|Ouvidoria|SAC\s*[0-9])",
             re.IGNORECASE,
         )
@@ -129,6 +133,88 @@ class BancoBrasilExtratoParser:
                 continue
 
             rest = m.group(5).strip()
+
+            # ── Linhas especiais de saldo ────────────────────────────────
+            if self._SALDO_ANT_RE.search(rest):
+                all_vals = self._ALL_VALUES_RE.findall(rest)
+                if all_vals:
+                    v_str, dc = all_vals[0]
+                    valor_sp = _parse_brl_decimal(v_str)
+                    saldo_sp = valor_sp if dc == "C" else -valor_sp
+                else:
+                    valor_sp, saldo_sp = _parse_brl_decimal("0"), _parse_brl_decimal("0")
+                line_idx += 1
+                lancamentos.append(LancamentoExtrato(
+                    linha_origem=line_idx,
+                    pagina=1,
+                    data=data,
+                    descricao_original="Saldo Anterior",
+                    documento="",
+                    valor=valor_sp,
+                    natureza_inferida="SALDO_ANTERIOR",
+                    saldo=saldo_sp,
+                    linha_original=line,
+                ))
+                i += 1
+                continue
+
+            if self._SALDO_FINAL_RE.search(rest):
+                all_vals = self._ALL_VALUES_RE.findall(rest)
+                if all_vals:
+                    v_str, dc = all_vals[0]
+                    valor_sp = _parse_brl_decimal(v_str)
+                    saldo_sp = valor_sp if dc == "C" else -valor_sp
+                else:
+                    valor_sp, saldo_sp = _parse_brl_decimal("0"), _parse_brl_decimal("0")
+                line_idx += 1
+                lancamentos.append(LancamentoExtrato(
+                    linha_origem=line_idx,
+                    pagina=1,
+                    data=data,
+                    descricao_original="Saldo Final",
+                    documento="",
+                    valor=valor_sp,
+                    natureza_inferida="SALDO_FINAL",
+                    saldo=saldo_sp,
+                    linha_original=line,
+                ))
+                i += 1
+                continue
+
+            if self._BB_RENDE_RE.search(rest):
+                all_vals = self._ALL_VALUES_RE.findall(rest)
+                if len(all_vals) >= 2:
+                    # Primeiro par = movimento, último par = saldo do dia
+                    v_str, dc = all_vals[0]
+                    valor_sp = _parse_brl_decimal(v_str)
+                    natureza_sp = "CREDITO" if dc == "C" else "DEBITO"
+                    s_str, s_dc = all_vals[-1]
+                    saldo_sp = _parse_brl_decimal(s_str)
+                    if s_dc == "D":
+                        saldo_sp = -saldo_sp
+                elif len(all_vals) == 1:
+                    v_str, dc = all_vals[0]
+                    valor_sp = _parse_brl_decimal(v_str)
+                    natureza_sp = "CREDITO" if dc == "C" else "DEBITO"
+                    saldo_sp = valor_sp if dc == "C" else -valor_sp
+                else:
+                    i += 1
+                    continue
+                line_idx += 1
+                lancamentos.append(LancamentoExtrato(
+                    linha_origem=line_idx,
+                    pagina=1,
+                    data=data,
+                    descricao_original="BB Rende Fácil",
+                    documento="9903",
+                    valor=valor_sp,
+                    natureza_inferida=natureza_sp,
+                    saldo=saldo_sp,
+                    linha_original=line,
+                ))
+                i += 1
+                continue
+            # ── Fim linhas especiais ─────────────────────────────────────
 
             complemento = ""
             if i + 1 < len(lines):
