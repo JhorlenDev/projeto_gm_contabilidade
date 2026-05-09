@@ -60,6 +60,7 @@ from .serializers import (
     TransacaoImportadaSerializer,
     SessaoConciliacaoSerializer,
 )
+from services.parsers.plano_contas_pdf import parse_plano_contas_pdf
 
 
 def _load_json_payload(value):
@@ -974,6 +975,75 @@ class PlanoContasView(APIView):
             return Response({"detail": "Não encontrado."}, status=status.HTTP_404_NOT_FOUND)
         obj.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class PlanoContasImportarView(APIView):
+    """
+    POST /api/plano-contas/importar/
+
+    Substitui completamente o plano de contas do escritório.
+    Aceita um PDF (campo 'arquivo') no formato exportado pelo sistema contábil.
+    Retorna { "importadas": N, "substituidas": N }.
+    """
+    authentication_classes = [KeycloakJWTAuthentication]
+    permission_classes = [HasUserGMRole]
+
+    def _get_escritorio(self, request):
+        esc_id = request.query_params.get("escritorio")
+        if esc_id:
+            try:
+                return Escritorio.objects.get(pk=esc_id)
+            except Escritorio.DoesNotExist:
+                pass
+        return Escritorio.objects.first()
+
+    def post(self, request):
+        escritorio = self._get_escritorio(request)
+        if not escritorio:
+            return Response({"detail": "Escritório não encontrado."}, status=status.HTTP_404_NOT_FOUND)
+
+        arquivo = request.FILES.get("arquivo")
+        if not arquivo:
+            return Response({"detail": "Campo 'arquivo' é obrigatório."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not arquivo.name.lower().endswith(".pdf"):
+            return Response({"detail": "Apenas arquivos PDF são aceitos."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            contas = parse_plano_contas_pdf(arquivo.read())
+        except Exception as exc:
+            return Response(
+                {"detail": f"Erro ao processar o PDF: {exc}"},
+                status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
+
+        if not contas:
+            return Response(
+                {"detail": "Nenhuma conta encontrada no PDF. Verifique se o arquivo está no formato correto."},
+                status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
+
+        from django.db import transaction
+        with transaction.atomic():
+            substituidas = PlanoContas.objects.filter(escritorio=escritorio).count()
+            PlanoContas.objects.filter(escritorio=escritorio).delete()
+            novos = [
+                PlanoContas(
+                    escritorio=escritorio,
+                    codigo=c.get("codigo", ""),
+                    classificacao=c.get("classificacao", ""),
+                    nome=c.get("nome", ""),
+                    tipo=c.get("tipo", ""),
+                    ativo=True,
+                )
+                for c in contas
+            ]
+            PlanoContas.objects.bulk_create(novos, batch_size=500)
+
+        return Response(
+            {"importadas": len(novos), "substituidas": substituidas},
+            status=status.HTTP_200_OK,
+        )
 
 
 class NfsePrefeituraView(APIView):
