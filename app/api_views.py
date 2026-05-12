@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from decimal import Decimal
 
-from django.db.models import Q
+from django.db.models import Prefetch, Q
 from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
@@ -122,7 +122,13 @@ class ClienteViewSet(viewsets.ModelViewSet):
     authentication_classes = [KeycloakJWTAuthentication]
     permission_classes = [HasUserGMRole]
     serializer_class = ClienteSerializer
-    queryset = Cliente.objects.all()
+    queryset = Cliente.objects.prefetch_related(
+        Prefetch(
+            "contas",
+            queryset=ContaCliente.objects.select_related("cliente").filter(tipo="BANCARIA", ativo=True),
+            to_attr="contas_bancarias",
+        )
+    )
     lookup_field = "id"
     lookup_value_regex = r"[0-9a-fA-F-]{36}"
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
@@ -139,8 +145,8 @@ class ContaClienteViewSet(viewsets.ModelViewSet):
     lookup_field = "id"
     lookup_value_regex = r"[0-9a-fA-F-]{36}"
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
-    search_fields = ["apelido", "banco", "agencia", "numero", "codigo_contabil", "descricao_contabil"]
-    ordering_fields = ["tipo", "apelido", "ativo", "criado_em", "atualizado_em"]
+    search_fields = ["apelido", "banco", "agencia", "conta", "digito", "numero", "tipo_conta", "chave_pix", "titular", "codigo_contabil", "descricao_contabil"]
+    ordering_fields = ["tipo", "tipo_conta", "apelido", "conta", "numero", "ativo", "criado_em", "atualizado_em"]
     ordering = ["-ativo", "tipo", "apelido"]
 
     def get_queryset(self):

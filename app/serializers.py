@@ -30,6 +30,7 @@ from .models import (
     SessaoConciliacao,
     TipoComponenteLancamento,
     TipoContaCliente,
+    TipoContaBancaria,
     TipoLancamento,
     TipoMovimento,
 )
@@ -82,6 +83,7 @@ def _format_currency(value) -> str:
 class ClienteSerializer(serializers.ModelSerializer):
     situacao_label = serializers.CharField(source="get_situacao_display", read_only=True)
     cpf_cnpj_formatado = serializers.SerializerMethodField()
+    contas_bancarias = serializers.SerializerMethodField()
 
     class Meta:
         model = Cliente
@@ -100,6 +102,7 @@ class ClienteSerializer(serializers.ModelSerializer):
             "data_inicio",
             "situacao",
             "situacao_label",
+            "contas_bancarias",
             "criado_em",
             "atualizado_em",
         ]
@@ -154,6 +157,12 @@ class ClienteSerializer(serializers.ModelSerializer):
             return f"{digits[:3]}.{digits[3:6]}.{digits[6:9]}-{digits[9:11]}"
         return cpf_cnpj
 
+    def get_contas_bancarias(self, obj):
+        contas = getattr(obj, "contas_bancarias", None)
+        if contas is None:
+            contas = obj.contas.select_related("cliente").filter(tipo=TipoContaCliente.BANCARIA, ativo=True)
+        return ContaClienteSerializer(contas, many=True, context=self.context).data
+
     def validate(self, attrs):
         attrs = super().validate(attrs)
         if not attrs.get("data_inicio"):
@@ -177,7 +186,12 @@ class ContaClienteSerializer(serializers.ModelSerializer):
             "apelido",
             "banco",
             "agencia",
+            "conta",
+            "digito",
             "numero",
+            "tipo_conta",
+            "chave_pix",
+            "titular",
             "codigo_contabil",
             "descricao_contabil",
             "observacoes",
@@ -192,14 +206,19 @@ class ContaClienteSerializer(serializers.ModelSerializer):
             "apelido": {"required": False, "allow_blank": True},
             "banco": {"required": False, "allow_blank": True},
             "agencia": {"required": False, "allow_blank": True},
+            "conta": {"required": False, "allow_blank": True},
+            "digito": {"required": False, "allow_blank": True},
             "numero": {"required": False, "allow_blank": True},
+            "tipo_conta": {"required": False, "allow_blank": True},
+            "chave_pix": {"required": False, "allow_blank": True},
+            "titular": {"required": False, "allow_blank": True},
             "codigo_contabil": {"required": False, "allow_blank": True},
             "descricao_contabil": {"required": False, "allow_blank": True},
             "observacoes": {"required": False, "allow_blank": True},
         }
 
     def validate_tipo(self, value):
-        return value or TipoContaCliente.BANCARIA
+        return str(value or TipoContaCliente.BANCARIA).strip().upper() or TipoContaCliente.BANCARIA
 
     def validate_apelido(self, value):
         return _strip_text(value)
@@ -210,7 +229,22 @@ class ContaClienteSerializer(serializers.ModelSerializer):
     def validate_agencia(self, value):
         return _strip_text(value)
 
+    def validate_conta(self, value):
+        return _strip_text(value)
+
+    def validate_digito(self, value):
+        return _strip_text(value)
+
     def validate_numero(self, value):
+        return _strip_text(value)
+
+    def validate_tipo_conta(self, value):
+        return str(value or TipoContaBancaria.CORRENTE).strip().upper() or TipoContaBancaria.CORRENTE
+
+    def validate_chave_pix(self, value):
+        return _strip_text(value)
+
+    def validate_titular(self, value):
         return _strip_text(value)
 
     def validate_codigo_contabil(self, value):
@@ -225,9 +259,10 @@ class ContaClienteSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         attrs = super().validate(attrs)
         instance = getattr(self, "instance", None)
-        tipo = _field_value(attrs, instance, "tipo") or TipoContaCliente.BANCARIA
+        tipo = str(_field_value(attrs, instance, "tipo") or TipoContaCliente.BANCARIA).upper()
         banco = _field_value(attrs, instance, "banco")
         agencia = _field_value(attrs, instance, "agencia")
+        conta = _field_value(attrs, instance, "conta")
         numero = _field_value(attrs, instance, "numero")
         codigo_contabil = _field_value(attrs, instance, "codigo_contabil")
 
@@ -238,7 +273,7 @@ class ContaClienteSerializer(serializers.ModelSerializer):
                 errors["banco"] = "Informe o banco."
             if not agencia:
                 errors["agencia"] = "Informe a agência."
-            if not numero:
+            if not conta and not numero:
                 errors["numero"] = "Informe o número da conta."
         elif tipo == TipoContaCliente.CONTABIL:
             if not codigo_contabil:
@@ -1016,10 +1051,14 @@ class BancoSerializer(serializers.ModelSerializer):
         return super().create(validated_data)
 
     def update(self, instance, validated_data):
+        old_logo_name = instance.logo.name if instance.logo else ""
         remover_logo = validated_data.pop("remover_logo", False)
         if remover_logo and instance.logo:
             instance.logo.delete(save=True)
-        return super().update(instance, validated_data)
+        updated = super().update(instance, validated_data)
+        if old_logo_name and updated.logo and updated.logo.name != old_logo_name:
+            updated.logo.storage.delete(old_logo_name)
+        return updated
 
     def get_logo_url(self, obj):
         if not obj.logo:

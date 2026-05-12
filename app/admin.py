@@ -25,9 +25,22 @@ class ClienteAdmin(admin.ModelAdmin):
 
 @admin.register(ContaCliente)
 class ContaClienteAdmin(admin.ModelAdmin):
-    list_display = ("cliente", "tipo", "apelido", "ativo", "criado_em")
-    list_filter = ("tipo", "ativo", "cliente")
-    search_fields = ("apelido", "banco", "agencia", "numero", "codigo_contabil", "descricao_contabil", "cliente__nome")
+    list_display = ("cliente", "tipo", "apelido", "banco", "numero", "tipo_conta", "ativo", "criado_em")
+    list_filter = ("tipo", "tipo_conta", "ativo", "cliente")
+    search_fields = (
+        "apelido",
+        "banco",
+        "agencia",
+        "conta",
+        "digito",
+        "numero",
+        "tipo_conta",
+        "chave_pix",
+        "titular",
+        "codigo_contabil",
+        "descricao_contabil",
+        "cliente__nome",
+    )
     ordering = ("-ativo", "tipo", "apelido")
 
 

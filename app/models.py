@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import uuid
 from pathlib import Path
 
@@ -14,6 +15,26 @@ from services.secure_storage import encrypted_private_storage
 
 def _generate_code(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex[:8].upper()}"
+
+
+def _split_numero_conta(numero: str) -> tuple[str, str]:
+    raw = str(numero or "").strip()
+    if not raw:
+        return "", ""
+
+    match = re.match(r"^(.*?)(?:[-\s]+([\dA-Za-z]))$", raw)
+    if not match:
+        return raw, ""
+
+    return str(match.group(1) or "").strip(), str(match.group(2) or "").strip()
+
+
+def _build_numero_conta(conta: str, digito: str, fallback: str = "") -> str:
+    base = str(conta or "").strip()
+    dv = str(digito or "").strip()
+    if base:
+        return f"{base}-{dv}" if dv else base
+    return str(fallback or "").strip()
 
 
 def _conciliador_upload_to(instance, filename: str) -> str:
@@ -46,6 +67,15 @@ class TipoMovimento(models.TextChoices):
 class TipoContaCliente(models.TextChoices):
     BANCARIA = "BANCARIA", "Conta bancária"
     CONTABIL = "CONTABIL", "Conta contábil"
+
+
+class TipoContaBancaria(models.TextChoices):
+    CORRENTE = "CORRENTE", "Conta corrente"
+    POUPANCA = "POUPANCA", "Poupança"
+    SALARIO = "SALARIO", "Salário"
+    CONJUNTA = "CONJUNTA", "Conjunta"
+    PIX = "PIX", "PIX"
+    OUTRA = "OUTRA", "Outra"
 
 
 class TipoComparacao(models.TextChoices):
@@ -137,7 +167,18 @@ class ContaCliente(models.Model):
     apelido = models.CharField(max_length=120, blank=True, default="")
     banco = models.CharField(max_length=120, blank=True, default="")
     agencia = models.CharField(max_length=20, blank=True, default="")
+    conta = models.CharField(max_length=30, blank=True, default="")
+    digito = models.CharField(max_length=10, blank=True, default="")
     numero = models.CharField(max_length=30, blank=True, default="")
+    tipo_conta = models.CharField(
+        max_length=20,
+        choices=TipoContaBancaria.choices,
+        blank=True,
+        default=TipoContaBancaria.CORRENTE,
+        db_index=True,
+    )
+    chave_pix = models.CharField(max_length=255, blank=True, default="")
+    titular = models.CharField(max_length=255, blank=True, default="")
     codigo_contabil = models.CharField(max_length=40, blank=True, default="")
     descricao_contabil = models.CharField(max_length=255, blank=True, default="")
     observacoes = models.TextField(blank=True, default="")
@@ -156,7 +197,12 @@ class ContaCliente(models.Model):
         self.apelido = str(self.apelido or "").strip()
         self.banco = str(self.banco or "").strip()
         self.agencia = str(self.agencia or "").strip()
+        self.conta = str(self.conta or "").strip()
+        self.digito = str(self.digito or "").strip()
         self.numero = str(self.numero or "").strip()
+        self.tipo_conta = str(self.tipo_conta or TipoContaBancaria.CORRENTE).strip().upper() or TipoContaBancaria.CORRENTE
+        self.chave_pix = str(self.chave_pix or "").strip()
+        self.titular = str(self.titular or "").strip()
         self.codigo_contabil = str(self.codigo_contabil or "").strip()
         self.descricao_contabil = str(self.descricao_contabil or "").strip()
         self.observacoes = str(self.observacoes or "").strip()
@@ -164,7 +210,19 @@ class ContaCliente(models.Model):
         if self.tipo == TipoContaCliente.CONTABIL:
             self.banco = ""
             self.agencia = ""
+            self.conta = ""
+            self.digito = ""
             self.numero = ""
+            self.tipo_conta = TipoContaBancaria.CORRENTE
+            self.chave_pix = ""
+            self.titular = ""
+        else:
+            if not self.conta and self.numero:
+                conta, digito = _split_numero_conta(self.numero)
+                self.conta = conta
+                if not self.digito:
+                    self.digito = digito
+            self.numero = _build_numero_conta(self.conta, self.digito, self.numero)
 
         super().save(*args, **kwargs)
 
@@ -176,7 +234,7 @@ class ContaCliente(models.Model):
                 errors["banco"] = "Informe o banco."
             if not self.agencia:
                 errors["agencia"] = "Informe a agência."
-            if not self.numero:
+            if not self.conta and not self.numero:
                 errors["numero"] = "Informe o número da conta."
         elif self.tipo == TipoContaCliente.CONTABIL:
             if not self.codigo_contabil:
@@ -187,9 +245,13 @@ class ContaCliente(models.Model):
         if errors:
             raise ValidationError(errors)
 
+    def numero_exibicao(self) -> str:
+        return _build_numero_conta(self.conta, self.digito, self.numero)
+
     def resumo(self) -> str:
         if self.tipo == TipoContaCliente.BANCARIA:
-            partes = [self.banco, f"Ag. {self.agencia}" if self.agencia else "", f"Conta {self.numero}" if self.numero else ""]
+            numero = self.numero_exibicao()
+            partes = [self.banco, f"Ag. {self.agencia}" if self.agencia else "", f"Conta {numero}" if numero else ""]
             partes = [parte for parte in partes if parte]
             base = " · ".join(partes) or self.apelido or "Conta bancária"
             if self.codigo_contabil:
