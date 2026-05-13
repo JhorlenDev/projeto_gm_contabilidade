@@ -24,7 +24,9 @@ from services.conciliador import (
 )
 from services.keycloak import KeycloakConfigurationError, KeycloakTokenError, exchange_code_for_token
 from services.pdf_parser import process_extrato_pdf
+from services.parsers.cielo import parse_cielo_extrato
 from services.parsers.comprovante import parse_comprovante_pdf
+from services.parsers.getnet import parse_getnet_extrato
 from services.parsers.nfse_prefeitura import parse_nfse_prefeitura
 
 from .models import (
@@ -758,8 +760,9 @@ class ExtratoPreviewView(APIView):
             )
 
         header = resultado.header
+        banco_detectado = header.dados_brutos.get("banco") or banco
         return Response({
-            "banco": banco if banco != "auto" else "auto-detectado",
+            "banco": banco_detectado,
             "empresa_nome": header.empresa_nome,
             "empresa_cnpj": header.empresa_cnpj,
             "agencia": header.agencia,
@@ -1153,6 +1156,194 @@ class NfsePrefeituraView(APIView):
             })
 
         return Response({"total": len(notas), "notas": notas})
+
+
+class GetnetExtratoView(APIView):
+    """
+    POST /api/getnet-extrato/
+    Recebe um PDF de extrato Getnet e extrai vendas consolidadas por data.
+    """
+    authentication_classes = [KeycloakJWTAuthentication]
+    permission_classes = [HasUserGMRole]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request, *args, **kwargs):
+        arquivo = request.FILES.get("arquivo")
+        if not arquivo:
+            return Response({"detail": "Campo 'arquivo' é obrigatório."}, status=status.HTTP_400_BAD_REQUEST)
+
+        ext = arquivo.name.rsplit(".", 1)[-1].lower() if "." in arquivo.name else ""
+        if ext != "pdf":
+            return Response({"detail": "Apenas arquivos PDF são suportados."}, status=status.HTTP_400_BAD_REQUEST)
+
+        resultado = parse_getnet_extrato(arquivo)
+        if not resultado.success:
+            return Response(
+                {"detail": resultado.erros[0] if resultado.erros else "Erro ao processar PDF."},
+                status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
+
+        empresa_id = request.data.get("empresa_id") or request.query_params.get("empresa_id")
+        escritorio_id = request.data.get("escritorio_id") or request.query_params.get("escritorio_id")
+        regras = []
+        if empresa_id:
+            try:
+                empresa = Cliente.objects.get(pk=empresa_id)
+                qs = RegraConciliador.objects.filter(ativo=True, aplicar_automatico=True)
+                if escritorio_id:
+                    qs = qs.filter(escritorio_id=escritorio_id).filter(
+                        Q(empresa__isnull=True) | Q(empresa=empresa)
+                    )
+                else:
+                    qs = qs.filter(empresa=empresa)
+                regras = list(qs.order_by("prioridade", "nome"))
+            except Cliente.DoesNotExist:
+                pass
+
+        def _match_regra(cartao: str):
+            target = normalize_text(cartao)
+            for regra in regras:
+                ref = normalize_text(regra.texto_referencia)
+                if not ref:
+                    continue
+                if regra.tipo_comparacao == "IGUAL":
+                    if target == ref:
+                        return regra
+                elif regra.tipo_comparacao == "COMECA_COM":
+                    if target.startswith(ref):
+                        return regra
+                else:
+                    if ref in target:
+                        return regra
+            return None
+
+        resumo = resultado.resumo
+        vendas = []
+        for venda in resultado.vendas:
+            regra = _match_regra(venda.cartao)
+            vendas.append({
+                "cartao": venda.cartao,
+                "data_venda": venda.data_venda.isoformat() if venda.data_venda else None,
+                "codigo_estabelecimento": venda.codigo_estabelecimento,
+                "quantidade": venda.quantidade,
+                "valor_bruto": str(venda.valor_bruto),
+                "valor_liquido": str(venda.valor_liquido),
+                "valor_tarifa": str(venda.valor_tarifa),
+                "regra_id": str(regra.id) if regra else None,
+                "regra_nome": regra.nome if regra else None,
+                "conta_debito": regra.conta_debito if regra else "",
+                "conta_credito": regra.conta_credito if regra else "",
+                "codigo_historico": regra.codigo_historico if regra else "",
+            })
+
+        return Response({
+            "resumo": {
+                "razao_social": resumo.razao_social,
+                "codigo_estabelecimento": resumo.codigo_estabelecimento,
+                "cnpj_cpf": resumo.cnpj_cpf,
+                "periodo_inicio": resumo.periodo_inicio.isoformat() if resumo.periodo_inicio else None,
+                "periodo_fim": resumo.periodo_fim.isoformat() if resumo.periodo_fim else None,
+                "valor_bruto": str(resumo.valor_bruto),
+                "valor_liquido": str(resumo.valor_liquido),
+                "valor_tarifa": str(resumo.valor_tarifa),
+            },
+            "total": len(vendas),
+            "vendas": vendas,
+        })
+
+
+class CieloExtratoView(APIView):
+    """
+    POST /api/cielo-extrato/
+    Recebe um PDF de extrato Cielo e extrai vendas detalhadas.
+    """
+    authentication_classes = [KeycloakJWTAuthentication]
+    permission_classes = [HasUserGMRole]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request, *args, **kwargs):
+        arquivo = request.FILES.get("arquivo")
+        if not arquivo:
+            return Response({"detail": "Campo 'arquivo' é obrigatório."}, status=status.HTTP_400_BAD_REQUEST)
+
+        ext = arquivo.name.rsplit(".", 1)[-1].lower() if "." in arquivo.name else ""
+        if ext != "pdf":
+            return Response({"detail": "Apenas arquivos PDF são suportados."}, status=status.HTTP_400_BAD_REQUEST)
+
+        resultado = parse_cielo_extrato(arquivo)
+        if not resultado.success:
+            return Response(
+                {"detail": resultado.erros[0] if resultado.erros else "Erro ao processar PDF."},
+                status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
+
+        empresa_id = request.data.get("empresa_id") or request.query_params.get("empresa_id")
+        escritorio_id = request.data.get("escritorio_id") or request.query_params.get("escritorio_id")
+        regras = []
+        if empresa_id:
+            try:
+                empresa = Cliente.objects.get(pk=empresa_id)
+                qs = RegraConciliador.objects.filter(ativo=True, aplicar_automatico=True)
+                if escritorio_id:
+                    qs = qs.filter(escritorio_id=escritorio_id).filter(
+                        Q(empresa__isnull=True) | Q(empresa=empresa)
+                    )
+                else:
+                    qs = qs.filter(empresa=empresa)
+                regras = list(qs.order_by("prioridade", "nome"))
+            except Cliente.DoesNotExist:
+                pass
+
+        def _match_regra(cartao: str):
+            target = normalize_text(cartao)
+            for regra in regras:
+                ref = normalize_text(regra.texto_referencia)
+                if not ref:
+                    continue
+                if regra.tipo_comparacao == "IGUAL":
+                    if target == ref:
+                        return regra
+                elif regra.tipo_comparacao == "COMECA_COM":
+                    if target.startswith(ref):
+                        return regra
+                else:
+                    if ref in target:
+                        return regra
+            return None
+
+        resumo = resultado.resumo
+        vendas = []
+        for venda in resultado.vendas:
+            regra = _match_regra(venda.cartao)
+            vendas.append({
+                "cartao": venda.cartao,
+                "data_venda": venda.data_venda.isoformat() if venda.data_venda else None,
+                "codigo_estabelecimento": venda.codigo_estabelecimento,
+                "quantidade": venda.quantidade,
+                "valor_bruto": str(venda.valor_bruto),
+                "valor_liquido": str(venda.valor_liquido),
+                "valor_tarifa": str(venda.valor_tarifa),
+                "regra_id": str(regra.id) if regra else None,
+                "regra_nome": regra.nome if regra else None,
+                "conta_debito": regra.conta_debito if regra else "",
+                "conta_credito": regra.conta_credito if regra else "",
+                "codigo_historico": regra.codigo_historico if regra else "",
+            })
+
+        return Response({
+            "resumo": {
+                "razao_social": resumo.razao_social,
+                "codigo_estabelecimento": resumo.codigo_estabelecimento,
+                "cnpj_cpf": resumo.cnpj_cpf,
+                "periodo_inicio": resumo.periodo_inicio.isoformat() if resumo.periodo_inicio else None,
+                "periodo_fim": resumo.periodo_fim.isoformat() if resumo.periodo_fim else None,
+                "valor_bruto": str(resumo.valor_bruto),
+                "valor_liquido": str(resumo.valor_liquido),
+                "valor_tarifa": str(resumo.valor_tarifa),
+            },
+            "total": sum(venda.quantidade for venda in resultado.vendas),
+            "vendas": vendas,
+        })
 
 
 class HistoricoContabilView(APIView):

@@ -63,13 +63,26 @@ class SantanderExtratoParser:
         if m:
             h.empresa_nome = m.group(1).strip()
 
-        m = re.search(r"Agência\s*\n?(\d+)", text, re.IGNORECASE)
-        if m:
-            h.agencia = m.group(1).strip()
+        agencia_patterns = [
+            r"Ag[êe]ncia\s*[:\-]?\s*\n?\s*(\d+)",
+            r"\bAg\.?\s*[:\-]?\s*(\d+)",
+        ]
+        for pattern in agencia_patterns:
+            m = re.search(pattern, text, re.IGNORECASE)
+            if m:
+                h.agencia = m.group(1).strip()
+                break
 
-        m = re.search(r"Conta Corrente\s*\n?([\d.]+\-\d)", text, re.IGNORECASE)
-        if m:
-            h.conta = m.group(1).strip()
+        conta_patterns = [
+            r"Conta\s+Corrente\s*[:\-]?\s*\n?\s*([\d.\-]+)",
+            r"\bConta\s*[:\-]?\s*([\d.\-]+)",
+            r"\bC/C\s*[:\-]?\s*([\d.\-]+)",
+        ]
+        for pattern in conta_patterns:
+            m = re.search(pattern, text, re.IGNORECASE)
+            if m:
+                h.conta = m.group(1).strip()
+                break
 
         # CNPJ/CPF do titular
         m = re.search(r"CNPJ[:\s]*([\d]{2}[\.\d]{11}[\/]?\d{4}[-]?\d{2})", text, re.IGNORECASE)
@@ -149,14 +162,9 @@ class SantanderExtratoParser:
             r"|N[ºo]\s+Documento|Movimentos\s+\(|Saldo\s+\("
             r"|Cr[eé]ditos\s+D[eé]bitos|Data\s+Descri[çc]"
             r"|EXTRATO\s+CONSOLIDADO"
+            r"|(?:janeiro|fevereiro|mar[çc]o|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)/\d{4}"
             r"|Agência\s*$|Conta\s+Corrente\s*$|Nome\s*$"
             r"|Resumo\s*[-–]|Per[íi]odo\s*$|Movimenta[çc][aã]o\s*$)",
-            re.IGNORECASE,
-        )
-
-        # Lançamentos internos de investimento (ContaMax sweep) — ignorar
-        _INTERNAL_RE = re.compile(
-            r"(APLICA[CÇ][AÃ]O\s+CONTAMAX|RESGATE\s+CONTAMAX)",
             re.IGNORECASE,
         )
 
@@ -183,11 +191,6 @@ class SantanderExtratoParser:
                     in_movimentacao = True
                 else:
                     continue
-
-            # Lançamentos internos ContaMax — descartar e limpar bloco pendente
-            if _INTERNAL_RE.search(line):
-                pending_desc.clear()
-                continue
 
             # Detecta prefixo de data DD/MM e atualiza current_date
             date_m = self._DATE_RE.match(line)
@@ -233,7 +236,7 @@ class SantanderExtratoParser:
             full_desc = " ".join(p for p in [*pending_desc, desc_part] if p).strip()
             pending_desc.clear()
 
-            if not full_desc or _INTERNAL_RE.search(full_desc):
+            if not full_desc:
                 continue
 
             if current_date is None:

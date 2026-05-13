@@ -102,13 +102,25 @@ class AmazoniaExtratoParser:
             h.empresa_cnpj = m.group(1).strip()
             h.empresa_nome = m.group(2).strip().split("\n")[0].strip()
 
-        m = re.search(r"Agência\s*:\s*(\d+)", text, re.IGNORECASE)
-        if m:
-            h.agencia = m.group(1)
+        agencia_patterns = [
+            r"Ag[êe]ncia\s*[:\-]?\s*(\d+)",
+            r"\bAg\.?\s*[:\-]?\s*(\d+)",
+        ]
+        for pattern in agencia_patterns:
+            m = re.search(pattern, text, re.IGNORECASE)
+            if m:
+                h.agencia = m.group(1).strip()
+                break
 
-        m = re.search(r"Conta\s*:\s*([\d\-]+)", text, re.IGNORECASE)
-        if m:
-            h.conta = m.group(1)
+        conta_patterns = [
+            r"Conta\s*[:\-]?\s*([\d.\-]+)",
+            r"\bC/C\s*[:\-]?\s*([\d.\-]+)",
+        ]
+        for pattern in conta_patterns:
+            m = re.search(pattern, text, re.IGNORECASE)
+            if m:
+                h.conta = m.group(1).strip()
+                break
 
         m = re.search(r"Saldo\s+Dispon[íi]vel\s+Inicial[:\s]*([\d.,]+)", text, re.IGNORECASE)
         if m:

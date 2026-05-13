@@ -95,10 +95,18 @@ class BradescoExtratoParser:
                 header.empresa_cnpj = m2.group(1)
 
         # Agência e conta
-        m = re.search(r"AG[:\s]*(\d+)\s*\|\s*(?:CC|Conta)[:\s]*([\d-]+)", full_text, re.IGNORECASE)
-        if m:
-            header.agencia = m.group(1)
-            header.conta = m.group(2)
+        account_patterns = [
+            r"AG[:\s]*(\d+)\s*\|\s*(?:CC|Conta)[:\s]*([\d.\-]+)",
+            r"Ag[êe]ncia\s*[:|]?\s*(\d+)\s*(?:\||/|-)?\s*(?:Conta|CC)\s*[:|]?\s*([\d.\-]+)",
+            r"Ag[êe]ncia\s+(\d+)\s+Conta\s+([\d.\-]+)",
+            r"Ag[êe]ncia\s*\|\s*Conta.*?\n\s*(\d+)\s*\|\s*([\d.\-]+)",
+        ]
+        for pattern in account_patterns:
+            m = re.search(pattern, full_text, re.IGNORECASE | re.DOTALL)
+            if m:
+                header.agencia = m.group(1).strip()
+                header.conta = m.group(2).strip()
+                break
 
         # Período
         m = re.search(r"Entre\s+(\d{2}/\d{2}/\d{4})\s+e\s+(\d{2}/\d{2}/\d{4})", full_text, re.IGNORECASE)

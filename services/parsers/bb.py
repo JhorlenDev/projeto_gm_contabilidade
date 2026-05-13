@@ -68,13 +68,26 @@ class BancoBrasilExtratoParser:
         if m:
             h.empresa_nome = m.group(1).strip()
 
-        m = re.search(r"Agência\s+([\d\-]+)", text, re.IGNORECASE)
-        if m:
-            h.agencia = m.group(1).strip()
+        agencia_patterns = [
+            r"Ag[êe]ncia\s*[:\-]?\s*([\d\-]+)",
+            r"\bAg\.?\s*[:\-]?\s*([\d\-]+)",
+        ]
+        for pattern in agencia_patterns:
+            m = re.search(pattern, text, re.IGNORECASE)
+            if m:
+                h.agencia = m.group(1).strip()
+                break
 
-        m = re.search(r"Conta corrente\s+([\d\-]+[A-Z]?)", text, re.IGNORECASE)
-        if m:
-            h.conta = m.group(1).strip()
+        conta_patterns = [
+            r"Conta\s+corrente\s*[:\-]?\s*([\d.\-]+[A-Z]?)",
+            r"\bConta\s*[:\-]?\s*([\d.\-]+[A-Z]?)",
+            r"\bC/C\s*[:\-]?\s*([\d.\-]+[A-Z]?)",
+        ]
+        for pattern in conta_patterns:
+            m = re.search(pattern, text, re.IGNORECASE)
+            if m:
+                h.conta = m.group(1).strip()
+                break
 
         m = re.search(r"CPF/CNPJ[:\s]*([\d.\/\-]+)", text, re.IGNORECASE)
         if not m:

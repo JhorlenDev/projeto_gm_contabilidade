@@ -65,7 +65,15 @@ def process_extrato_pdf(uploaded_file, banco: str = "auto") -> ExtratoResult:
             reader = PdfReader(io.BytesIO(raw))
             first_page = reader.pages[0].extract_text() or "" if reader.pages else ""
             fp_lower = first_page.lower()
-            if "bradesco" in fp_lower or "net empresa" in fp_lower:
+            if (
+                "bradesco" in fp_lower
+                or "net empresa" in fp_lower
+                or (
+                    "extrato mensal / por período" in fp_lower
+                    and "agência | conta" in fp_lower
+                    and "total disponível" in fp_lower
+                )
+            ):
                 banco = "bradesco"
             elif "banco da amazônia" in fp_lower or "banco da amazonia" in fp_lower or "gesop" in fp_lower or "pd_ccor" in fp_lower or "basa" in fp_lower:
                 banco = "amazonia"

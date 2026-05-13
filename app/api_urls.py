@@ -4,12 +4,14 @@ from rest_framework.routers import DefaultRouter
 from .api_views import (
     BancoViewSet,
     CertificadoDigitalClienteViewSet,
+    CieloExtratoView,
     ClienteViewSet,
     ComprovantePreviw,
     ContaClienteViewSet,
     EscritorioViewSet,
     ExtratoHistoricoView,
     ExtratoPreviewView,
+    GetnetExtratoView,
     HistoricoContabilView,
     ImportacaoExtratoViewSet,
     KeycloakTokenExchangeView,
@@ -49,5 +51,7 @@ urlpatterns = [
     path("historico-contabil/", HistoricoContabilView.as_view(), name="historico-contabil"),
     path("historico-contabil/<uuid:pk>/", HistoricoContabilView.as_view(), name="historico-contabil-detail"),
     path("nfse-prefeitura/", NfsePrefeituraView.as_view(), name="nfse-prefeitura"),
+    path("getnet-extrato/", GetnetExtratoView.as_view(), name="getnet-extrato"),
+    path("cielo-extrato/", CieloExtratoView.as_view(), name="cielo-extrato"),
     path("teste/", TesteView.as_view(), name="teste"),
 ]

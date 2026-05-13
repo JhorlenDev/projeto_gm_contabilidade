@@ -189,8 +189,8 @@ class PDFExtratoParser:
 
         agencia_patterns = [
             r"AG[\s:]*(?:Ncia|NCO)?[:\s]*(\d+)",
-            r"AGÊNCIA[:\s]*(\d+)",
-            r"AG[:\s]*(\d+)",
+            r"AG[ÊE]NCIA[:\s]*(\d+)",
+            r"\bAG\.?[:\s]*(\d+)",
         ]
         for pattern in agencia_patterns:
             match = re.search(pattern, full_text, re.IGNORECASE)
@@ -199,9 +199,9 @@ class PDFExtratoParser:
                 break
 
         conta_patterns = [
-            r"CONTA[:\s]*(\d+[\-\d]*)",
-            r"CC[:\s]*(\d+[\-\d]*)",
-            r"Conta Corrente[:\s]*(\d+[\-\d]*)",
+            r"CONTA(?:\s+CORRENTE)?[:\s]*(\d+[\d.\-]*)",
+            r"C/C[:\s]*(\d+[\d.\-]*)",
+            r"CC[:\s]*(\d+[\d.\-]*)",
         ]
         for pattern in conta_patterns:
             match = re.search(pattern, full_text, re.IGNORECASE)
