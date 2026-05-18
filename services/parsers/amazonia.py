@@ -1,12 +1,20 @@
 """
 Parser para extrato Banco da Amazônia (GESOP / PD_CCOR).
 Formato: DATA | NR DOC | HISTÓRICO | VALOR LANCTO | D/C | SALDO
+Utiliza pdfplumber e pandas para extrair e organizar os dados.
 """
 from __future__ import annotations
 
 import io
 import re
 from datetime import date
+from decimal import Decimal
+import pandas as pd
+
+try:
+    import pdfplumber
+except ImportError:
+    pdfplumber = None
 
 from .base import (
     ExtratoHeader,
@@ -21,76 +29,113 @@ from .base import (
 class AmazoniaExtratoParser:
     """
     Extrato mensal do Banco da Amazônia — sistema GESOP.
-    Layout esperado após extração pypdf:
-      02/01/24 026577 1127 - AUTOMATIZACAO TARIFA MANUTENCAO PJ -45,00 D 40.318,30
-    Aceita anos com 2 ou 4 dígitos. Suporta extração por bloco (cada coluna em linha separada).
     """
 
-    # Aceita DD/MM/YY e DD/MM/YYYY
     _DATE_RE = re.compile(r"^(\d{2}/\d{2}/\d{2,4})(?:\s+(.+))?$")
     _VALUE_RE = re.compile(r"-?[\d.]+,\d{2}")
-    # D/C pode estar no final da linha (sem trailing number)
     _DC_RE = re.compile(r"([\d.,]+)\s+([DC])(?:\s+[\d.,]+|\s*$)")
 
     def parse(self, uploaded_file) -> ExtratoResult:
+        if not pdfplumber:
+            return ExtratoResult(success=False, erros=["pdfplumber não instalado."])
+
         try:
-            from pypdf import PdfReader
-        except ImportError:
-            return ExtratoResult(success=False, erros=["pypdf não instalado."])
-        try:
-            reader = PdfReader(io.BytesIO(_read_file_bytes(uploaded_file)))
+            raw = _read_file_bytes(uploaded_file)
+            pdf_file = io.BytesIO(raw)
         except Exception as exc:
             return ExtratoResult(success=False, erros=[f"Erro ao ler PDF: {exc}"])
 
-        pages = [p.extract_text() or "" for p in reader.pages]
+        try:
+            pages = []
+            with pdfplumber.open(pdf_file) as pdf:
+                for page in pdf.pages:
+                    text = page.extract_text(layout=False) or ""
+                    pages.append(text)
+        except Exception as exc:
+            return ExtratoResult(success=False, erros=[f"Erro no pdfplumber: {exc}"])
+
         full_text = "\n".join(pages)
         lines = [l.strip() for l in full_text.splitlines() if l.strip()]
 
         header = self._extract_header(full_text)
-        lancamentos = self._extract_lancamentos(lines)
+        dados_brutos = self._extract_raw_data(lines)
 
-        # Injetar Saldo Anterior e Saldo Final como lançamentos especiais
+        # Injetar Saldo Anterior se houver
         ref_date = header.periodo_inicio
-        if lancamentos and not ref_date:
-            ref_date = lancamentos[0].data
+        if dados_brutos and not ref_date:
+            ref_date = dados_brutos[0].get("data_obj")
 
         if ref_date and header.saldo is not None and str(header.dados_brutos.get("saldo_anterior", "")) != "0":
-            lancamentos.insert(0, LancamentoExtrato(
-                linha_origem=0,
-                pagina=1,
-                data=ref_date,
-                descricao_original="Saldo Disponível Inicial",
-                documento="",
-                valor=header.saldo,
-                natureza_inferida="SALDO_ANTERIOR",
-                saldo=header.saldo,
-                linha_original="",
+            dados_brutos.insert(0, {
+                "data_obj": ref_date,
+                "descricao": "Saldo Disponível Inicial",
+                "documento": "",
+                "valor_decimal": header.saldo,
+                "natureza": "SALDO_ANTERIOR",
+                "saldo_decimal": header.saldo,
+            })
+
+        ultimo_com_saldo = next((row for row in reversed(dados_brutos) if row.get("saldo_decimal") is not None), None)
+        if ultimo_com_saldo:
+            saldo_final = ultimo_com_saldo["saldo_decimal"]
+            dados_brutos.append({
+                "data_obj": ultimo_com_saldo.get("data_obj"),
+                "descricao": "Saldo Final",
+                "documento": "",
+                "valor_decimal": abs(saldo_final),
+                "natureza": "SALDO_FINAL",
+                "saldo_decimal": saldo_final,
+            })
+
+        if not dados_brutos:
+            return ExtratoResult(
+                success=True,
+                header=header,
+                lancamentos=[],
+                total_lancamentos=0,
+            )
+
+        df = pd.DataFrame(dados_brutos)
+
+        df['descricao'] = df['descricao'].fillna("").astype(str).str.strip()
+        df['documento'] = df['documento'].fillna("").astype(str).str.strip()
+        df['natureza'] = df['natureza'].fillna("").astype(str).str.strip()
+
+        df = df[
+            (df['valor_decimal'] > Decimal("0"))
+            | (df['natureza'].isin(["SALDO_ANTERIOR", "SALDO_FINAL"]))
+        ]
+
+        lancamentos = []
+        for _, row in df.iterrows():
+            lancamentos.append(LancamentoExtrato(
+                data=row['data_obj'],
+                descricao_original=row['descricao'],
+                valor=row['valor_decimal'],
+                natureza_inferida=row['natureza'],
+                documento=row['documento'],
+                saldo=row.get('saldo_decimal'),
             ))
 
-        if lancamentos:
-            ultimo = next((l for l in reversed(lancamentos) if l.natureza_inferida not in ("SALDO_ANTERIOR", "SALDO_FINAL")), None)
-            if ultimo and ultimo.saldo is not None:
-                saldo_final = ultimo.saldo
-                # Atualizar header.saldo para refletir o saldo final real
-                header.saldo = saldo_final
-                header.dados_brutos["saldo_final"] = str(saldo_final)
-                lancamentos.append(LancamentoExtrato(
-                    linha_origem=9999,
-                    pagina=1,
-                    data=ultimo.data or ref_date,
-                    descricao_original="Saldo Final",
-                    documento="",
-                    valor=saldo_final,
-                    natureza_inferida="SALDO_FINAL",
-                    saldo=saldo_final,
-                    linha_original="",
-                ))
+        header.dados_brutos["saldo_anterior"] = str(
+            next((l.saldo if l.saldo is not None else l.valor for l in lancamentos if l.natureza_inferida == "SALDO_ANTERIOR"), Decimal("0"))
+        )
+        header.saldo = next(
+            (l.saldo if l.saldo is not None else l.valor for l in reversed(lancamentos) if l.natureza_inferida == "SALDO_FINAL"),
+            header.saldo,
+        )
+        header.dados_brutos["total_debito"] = str(
+            sum((l.valor for l in lancamentos if l.natureza_inferida == "DEBITO"), Decimal("0"))
+        )
+        header.dados_brutos["total_credito"] = str(
+            sum((l.valor for l in lancamentos if l.natureza_inferida == "CREDITO"), Decimal("0"))
+        )
 
         return ExtratoResult(
             success=True,
             header=header,
             lancamentos=lancamentos,
-            total_lancamentos=len([l for l in lancamentos if l.natureza_inferida not in ("SALDO_ANTERIOR", "SALDO_FINAL")]),
+            total_lancamentos=len(lancamentos),
         )
 
     def _extract_header(self, text: str) -> ExtratoHeader:
@@ -135,7 +180,6 @@ class AmazoniaExtratoParser:
         if m:
             h.dados_brutos["total_credito"] = str(_parse_brl_decimal(m.group(1)))
 
-        # Período da referência (ex: "01 / 2024")
         m = re.search(r"(\d{2})\s*/\s*(\d{4})", text)
         if m:
             try:
@@ -148,12 +192,8 @@ class AmazoniaExtratoParser:
 
         return h
 
-    def _extract_lancamentos(self, lines: list[str]) -> list[LancamentoExtrato]:
-        """
-        Acumula linhas por bloco de data para suportar tanto o layout em linha única
-        quanto o layout multi-linha onde pypdf extrai cada coluna em linhas separadas.
-        """
-        lancamentos = []
+    def _extract_raw_data(self, lines: list[str]) -> list[dict]:
+        dados = []
 
         _SKIP_RE = re.compile(
             r"^(Total\s+de|Data\s+da|Hora\s+da|Emitido|Para\s+simples|Vencto|Tipo\s+Conta"
@@ -168,7 +208,7 @@ class AmazoniaExtratoParser:
         current_date: str | None = None
         current_first: str = ""
         current_extra: list[str] = []
-        block_done = False  # True quando já coletamos SALDO (6ª linha após DATA)
+        block_done = False
 
         _DC_LINE_RE = re.compile(r"^[DC]$")
 
@@ -185,9 +225,6 @@ class AmazoniaExtratoParser:
                 block_done = False
             elif current_date is not None and not block_done:
                 current_extra.append(line)
-                # Um bloco BASA tem exatamente: NR_DOC, HISTÓRICO, VALOR, D/C, SALDO
-                # Quando a última linha acumulada é o SALDO (linha após D/C), o bloco está completo.
-                # Detectamos: penúltima linha é "D" ou "C" e última é um número decimal.
                 if len(current_extra) >= 4:
                     penultima = current_extra[-2] if len(current_extra) >= 2 else ""
                     ultima = current_extra[-1]
@@ -197,7 +234,6 @@ class AmazoniaExtratoParser:
         if current_date is not None:
             blocks.append((current_date, current_first, current_extra))
 
-        line_idx = 0
         for date_str, first_rest, extra_lines in blocks:
             data = _parse_date_br(date_str)
             if not data:
@@ -214,7 +250,6 @@ class AmazoniaExtratoParser:
             saldo_str = values[-1]
             valor_str = values[-2] if len(values) >= 2 else values[-1]
 
-            saldo = _parse_brl_decimal(saldo_str)
             valor = abs(_parse_brl_decimal(valor_str))
 
             if valor <= 0:
@@ -237,18 +272,13 @@ class AmazoniaExtratoParser:
                 documento = doc_m.group(1)
                 desc_raw = desc_raw[doc_m.end():].strip()
 
-            line_idx += 1
-            lancamentos.append(LancamentoExtrato(
-                linha_origem=line_idx,
-                pagina=1,
-                data=data,
-                descricao_original=desc_raw,
-                documento=documento,
-                valor=valor,
-                natureza_inferida=natureza,
-                saldo=saldo,
-                linha_original=first_rest or " ".join(extra_lines[:2]),
-            ))
+            dados.append({
+                "data_obj": data,
+                "descricao": desc_raw,
+                "documento": documento,
+                "valor_decimal": valor,
+                "natureza": natureza,
+                "saldo_decimal": _parse_brl_decimal(saldo_str),
+            })
 
-        lancamentos.sort(key=lambda x: (x.data or date.max, x.linha_origem))
-        return lancamentos
+        return dados

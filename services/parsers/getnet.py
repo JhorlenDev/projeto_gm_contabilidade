@@ -1,5 +1,6 @@
 """
 Parser para extrato Getnet "O que vendi - Consolidado por Data de Vendas".
+Utiliza pdfplumber e pandas para extrair e organizar os dados em tabelas.
 """
 from __future__ import annotations
 
@@ -9,6 +10,12 @@ from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
 from typing import Optional
+import pandas as pd
+
+try:
+    import pdfplumber
+except ImportError:
+    pdfplumber = None
 
 from .base import _parse_brl_decimal, _parse_date_br, _read_file_bytes
 
@@ -45,26 +52,65 @@ class GetnetResult:
 
 
 def parse_getnet_extrato(uploaded_file) -> GetnetResult:
-    try:
-        from pypdf import PdfReader
-    except ImportError:
-        return GetnetResult(success=False, erros=["pypdf não instalado."])
+    if not pdfplumber:
+        return GetnetResult(success=False, erros=["pdfplumber não instalado."])
 
     try:
         raw = _read_file_bytes(uploaded_file)
-        reader = PdfReader(io.BytesIO(raw))
+        pdf_file = io.BytesIO(raw)
     except Exception as exc:
         return GetnetResult(success=False, erros=[f"Erro ao ler PDF: {exc}"])
 
-    text = "\n".join(page.extract_text() or "" for page in reader.pages)
-    if not text.strip():
-        return GetnetResult(success=False, erros=["Nenhum texto encontrado no PDF."])
+    try:
+        with pdfplumber.open(pdf_file) as pdf:
+            # 1) Extrair resumo (usando a primeira página em formato texto)
+            first_page_text = pdf.pages[0].extract_text(layout=False) or ""
+            resumo = _parse_resumo(first_page_text)
 
-    resumo = _parse_resumo(text)
-    vendas = _parse_vendas(text)
+            # 2) Extrair vendas via tabelas nativas do pdfplumber
+            todas_linhas_tabela = []
+            for page in pdf.pages:
+                tables = page.extract_tables()
+                for table in tables:
+                    for row in table:
+                        # Heurística para achar a linha de transação:
+                        # O índice 0 deve ter algo numérico (cod estabelecimento), e tamanho suficiente
+                        if len(row) > 11 and row[0] and str(row[0]).strip().isdigit():
+                            todas_linhas_tabela.append(row)
 
-    if not vendas:
+    except Exception as exc:
+        return GetnetResult(success=False, erros=[f"Erro ao processar PDF com pdfplumber: {exc}"])
+
+    if not todas_linhas_tabela:
         return GetnetResult(success=False, erros=["Nenhuma venda Getnet encontrada no PDF."])
+
+    # 3) Usar Pandas para organizar os dados tabulares
+    df = pd.DataFrame(todas_linhas_tabela)
+    
+    # As colunas esperadas baseadas no layout da Getnet:
+    # 0: Cód Estabelecimento | 1: Cartões | 3: Data Venda | 4: Qtd Vendas | 6: Valor Bruto | 8: Valor Tarifa | 11: Valor Líquido
+    
+    df['cartao'] = df[1].fillna("").astype(str).str.strip()
+    df['data_venda_obj'] = df[3].apply(_parse_date_br)
+    df['codigo_estabelecimento'] = df[0].fillna("").astype(str).str.strip()
+    df['quantidade'] = pd.to_numeric(df[4].fillna("0").astype(str).str.replace(r'\D', '', regex=True), errors='coerce').fillna(0).astype(int)
+    
+    # Valores financeiros
+    df['valor_bruto_dec'] = df[6].apply(_parse_brl_decimal)
+    df['valor_tarifa_dec'] = df[8].apply(_parse_brl_decimal)
+    df['valor_liquido_dec'] = df[11].apply(_parse_brl_decimal)
+
+    vendas = []
+    for _, row in df.iterrows():
+        vendas.append(GetnetVenda(
+            cartao=row['cartao'],
+            data_venda=row['data_venda_obj'],
+            codigo_estabelecimento=row['codigo_estabelecimento'],
+            quantidade=row['quantidade'],
+            valor_bruto=row['valor_bruto_dec'],
+            valor_liquido=row['valor_liquido_dec'],
+            valor_tarifa=row['valor_tarifa_dec']
+        ))
 
     return GetnetResult(success=True, resumo=resumo, vendas=vendas)
 
@@ -100,34 +146,3 @@ def _parse_resumo(text: str) -> GetnetResumo:
         resumo.valor_liquido = _parse_brl_decimal(m.group(3))
 
     return resumo
-
-
-def _parse_vendas(text: str) -> list[GetnetVenda]:
-    vendas: list[GetnetVenda] = []
-    line_re = re.compile(
-        r"^(?P<cartao>[A-ZÁÉÍÓÚÂÊÔÃÕÇ ]+?)\s+"
-        r"(?P<data>\d{2}/\d{2}/\d{4})"
-        r"(?P<codigo>\d{6,})\s+"
-        r"R\$\s*(?P<bruto>[\d.]+,\d{2})\s+"
-        r"R\$\s*(?P<liquido>[\d.]+,\d{2})\s*"
-        r"-\s*R\$\s*(?P<tarifa>[\d.]+,\d{2})(?P<quantidade>\d+)$"
-    )
-
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        m = line_re.match(line)
-        if not m:
-            continue
-        vendas.append(
-            GetnetVenda(
-                cartao=m.group("cartao").strip(),
-                data_venda=_parse_date_br(m.group("data")),
-                codigo_estabelecimento=m.group("codigo").strip(),
-                quantidade=int(m.group("quantidade")),
-                valor_bruto=_parse_brl_decimal(m.group("bruto")),
-                valor_liquido=_parse_brl_decimal(m.group("liquido")),
-                valor_tarifa=_parse_brl_decimal(m.group("tarifa")),
-            )
-        )
-
-    return vendas

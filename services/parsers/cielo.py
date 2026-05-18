@@ -1,5 +1,6 @@
 """
 Parser para extrato Cielo "Detalhado de vendas Cielo".
+Utiliza pdfplumber e pandas para extrair e organizar os dados em lote.
 """
 from __future__ import annotations
 
@@ -9,6 +10,12 @@ from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
 from typing import Optional
+import pandas as pd
+
+try:
+    import pdfplumber
+except ImportError:
+    pdfplumber = None
 
 from .base import _parse_brl_decimal, _parse_date_br, _read_file_bytes
 
@@ -45,27 +52,69 @@ class CieloResult:
 
 
 def parse_cielo_extrato(uploaded_file) -> CieloResult:
-    try:
-        from pypdf import PdfReader
-    except ImportError:
-        return CieloResult(success=False, erros=["pypdf não instalado."])
+    if not pdfplumber:
+        return CieloResult(success=False, erros=["pdfplumber não instalado."])
 
     try:
         raw = _read_file_bytes(uploaded_file)
-        reader = PdfReader(io.BytesIO(raw))
+        pdf_file = io.BytesIO(raw)
     except Exception as exc:
         return CieloResult(success=False, erros=[f"Erro ao ler PDF: {exc}"])
 
-    text = "\n".join(page.extract_text() or "" for page in reader.pages)
-    text = text.replace("\xa0", " ")
-    if not text.strip():
+    try:
+        pages = []
+        with pdfplumber.open(pdf_file) as pdf:
+            for page in pdf.pages:
+                text = page.extract_text(layout=False) or ""
+                pages.append(text.replace("\xa0", " "))
+    except Exception as exc:
+        return CieloResult(success=False, erros=[f"Erro no pdfplumber: {exc}"])
+
+    full_text = "\n".join(pages)
+
+    if not full_text.strip():
         return CieloResult(success=False, erros=["Nenhum texto encontrado no PDF."])
 
-    resumo = _parse_resumo(text)
-    vendas = _parse_vendas(text)
+    resumo = _parse_resumo(full_text)
+    dados_brutos = _extract_raw_data(full_text)
 
-    if not vendas:
+    if not dados_brutos:
         return CieloResult(success=False, erros=["Nenhuma venda Cielo encontrada no PDF."])
+
+    # Utilizando Pandas para agrupar e somar os valores das transações detalhadas
+    df = pd.DataFrame(dados_brutos)
+
+    # Conversão e higienização
+    df['data_venda_obj'] = df['data'].apply(_parse_date_br)
+    df['cartao'] = (df['bandeira'].str.upper() + " " + df['forma'].str.upper()).str.strip()
+    df['codigo_estabelecimento'] = df['codigo'].str.strip()
+    
+    df['valor_bruto_dec'] = df['bruto'].apply(_parse_brl_decimal)
+    df['valor_tarifa_dec'] = df['tarifa'].apply(_parse_brl_decimal).abs()
+    df['valor_liquido_dec'] = df['liquido'].apply(_parse_brl_decimal)
+
+    # A Cielo lista transações individuais (Detalhado), mas o motor precisa delas consolidadas por dia/cartão
+    df_consolidado = df.groupby(['cartao', 'data_venda_obj', 'codigo_estabelecimento']).agg({
+        'data': 'count', # count = quantidade de vendas
+        'valor_bruto_dec': 'sum',
+        'valor_tarifa_dec': 'sum',
+        'valor_liquido_dec': 'sum'
+    }).reset_index().rename(columns={'data': 'quantidade'})
+
+    # Ordena cronologicamente
+    df_consolidado = df_consolidado.sort_values(by=['data_venda_obj', 'cartao', 'codigo_estabelecimento'])
+
+    vendas = []
+    for _, row in df_consolidado.iterrows():
+        vendas.append(CieloVenda(
+            cartao=row['cartao'],
+            data_venda=row['data_venda_obj'],
+            codigo_estabelecimento=row['codigo_estabelecimento'],
+            quantidade=row['quantidade'],
+            valor_bruto=row['valor_bruto_dec'],
+            valor_liquido=row['valor_liquido_dec'],
+            valor_tarifa=row['valor_tarifa_dec']
+        ))
 
     return CieloResult(success=True, resumo=resumo, vendas=vendas)
 
@@ -108,8 +157,8 @@ def _parse_resumo(text: str) -> CieloResumo:
     return resumo
 
 
-def _parse_vendas(text: str) -> list[CieloVenda]:
-    vendas_por_chave: dict[tuple[str, Optional[date], str], CieloVenda] = {}
+def _extract_raw_data(text: str) -> list[dict]:
+    dados = []
     line_re = re.compile(
         r"^(?P<data>\d{2}/\d{2}/\d{4})\s+"
         r"(?P<hora>\d{2}:\d{2})\s+"
@@ -130,29 +179,6 @@ def _parse_vendas(text: str) -> list[CieloVenda]:
         if not m:
             continue
 
-        forma = m.group("forma").strip().upper()
-        bandeira = m.group("bandeira").strip().upper()
-        data_venda = _parse_date_br(m.group("data"))
-        codigo_estabelecimento = m.group("codigo").strip()
-        cartao = f"{bandeira} {forma}"
-        chave = (cartao, data_venda, codigo_estabelecimento)
-        venda = vendas_por_chave.get(chave)
+        dados.append(m.groupdict())
 
-        if not venda:
-            venda = CieloVenda(
-                cartao=cartao,
-                data_venda=data_venda,
-                codigo_estabelecimento=codigo_estabelecimento,
-                quantidade=0,
-            )
-            vendas_por_chave[chave] = venda
-
-        venda.quantidade += 1
-        venda.valor_bruto += _parse_brl_decimal(m.group("bruto"))
-        venda.valor_liquido += _parse_brl_decimal(m.group("liquido"))
-        venda.valor_tarifa += abs(_parse_brl_decimal(m.group("tarifa")))
-
-    return sorted(
-        vendas_por_chave.values(),
-        key=lambda venda: (venda.data_venda or date.max, venda.cartao, venda.codigo_estabelecimento),
-    )
+    return dados

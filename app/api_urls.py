@@ -22,6 +22,7 @@ from .api_views import (
     RegraConciliadorViewSet,
     TransacaoImportadaViewSet,
     SessaoConciliacaoViewSet,
+    ConciliadorProcessoView,
 )
 from .views import TesteView
 
@@ -53,5 +54,6 @@ urlpatterns = [
     path("nfse-prefeitura/", NfsePrefeituraView.as_view(), name="nfse-prefeitura"),
     path("getnet-extrato/", GetnetExtratoView.as_view(), name="getnet-extrato"),
     path("cielo-extrato/", CieloExtratoView.as_view(), name="cielo-extrato"),
+    path("conciliador-processo/", ConciliadorProcessoView.as_view(), name="conciliador-processo"),
     path("teste/", TesteView.as_view(), name="teste"),
 ]

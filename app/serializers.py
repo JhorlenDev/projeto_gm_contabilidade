@@ -1075,6 +1075,7 @@ class SessaoConciliacaoSerializer(serializers.ModelSerializer):
         model = SessaoConciliacao
         fields = [
             "id",
+            "escritorio",
             "empresa",
             "empresa_nome",
             "data_inicio",
@@ -1086,3 +1087,4 @@ class SessaoConciliacaoSerializer(serializers.ModelSerializer):
             "dados_comprovantes",
         ]
         read_only_fields = ["id", "data_inicio", "atualizado_em"]
+        extra_kwargs = {"escritorio": {"required": False}}

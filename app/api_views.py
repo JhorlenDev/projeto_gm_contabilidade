@@ -28,6 +28,7 @@ from services.parsers.cielo import parse_cielo_extrato
 from services.parsers.comprovante import parse_comprovante_pdf
 from services.parsers.getnet import parse_getnet_extrato
 from services.parsers.nfse_prefeitura import parse_nfse_prefeitura
+from services.motor_consipix import MotorConsiPixPandas
 
 from .models import (
     Banco,
@@ -532,6 +533,38 @@ class TransacaoImportadaViewSet(viewsets.ModelViewSet):
         )
 
         resultado = processar_comprovante(transacao, comprovante_data, usuario=usuario)
+        return Response(resultado)
+
+
+class ConciliadorProcessoView(APIView):
+    authentication_classes = [KeycloakJWTAuthentication]
+    permission_classes = [HasUserGMRole]
+
+    def post(self, request):
+        sessao_ids = request.data.get("sessoes", [])
+        processo = int(request.data.get("processo", 1))
+        escritorio_id = request.data.get("escritorio")
+        empresa_id = request.data.get("empresa")
+
+        if not sessao_ids or not escritorio_id or not empresa_id:
+            return Response(
+                {"detail": "Campos sessoes, escritorio e empresa são obrigatórios."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        motor = MotorConsiPixPandas(escritorio_id, empresa_id)
+        motor.carregar_dados(sessao_ids)
+
+        if processo == 1:
+            resultado = motor.executar_etapa_1()
+        elif processo == 2:
+            resultado = motor.executar_etapa_2()
+        else:
+            return Response(
+                {"detail": f"Processo {processo} ainda não implementado."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         return Response(resultado)
 
     @action(detail=False, methods=["get"])
@@ -1118,27 +1151,28 @@ class NfsePrefeituraView(APIView):
             except Cliente.DoesNotExist:
                 pass
 
-        def _match_regra(nome_tomador: str, cpf_tomador: str):
-            """Retorna a primeira regra que bate com o nome ou CPF do tomador."""
-            target = normalize_text(nome_tomador + " " + cpf_tomador)
+        def _match_regra(nome_tomador: str, cpf_tomador: str, tipo_pagamento: str):
+            """Retorna a primeira regra que bate com o tipo de pagamento; nome/CPF ficam como compatibilidade."""
+            tipo_target = normalize_text(tipo_pagamento)
+            tomador_target = normalize_text(nome_tomador + " " + cpf_tomador)
             for regra in regras:
                 ref = normalize_text(regra.texto_referencia)
                 if not ref:
                     continue
                 if regra.tipo_comparacao == "IGUAL":
-                    if target == ref or normalize_text(cpf_tomador) == ref:
+                    if tipo_target == ref or tomador_target == ref or normalize_text(cpf_tomador) == ref:
                         return regra
                 elif regra.tipo_comparacao == "COMECA_COM":
-                    if target.startswith(ref):
+                    if tipo_target.startswith(ref) or tomador_target.startswith(ref):
                         return regra
                 else:  # CONTEM
-                    if ref in target:
+                    if ref in tipo_target or ref in tomador_target:
                         return regra
             return None
 
         notas = []
         for n in resultado.notas:
-            regra = _match_regra(n.nome_tomador, n.cpf_tomador)
+            regra = _match_regra(n.nome_tomador, n.cpf_tomador, n.tipo_pagamento)
             notas.append({
                 "numero_nota": n.numero_nota,
                 "data_emissao": n.data_emissao.isoformat() if n.data_emissao else None,
@@ -1421,5 +1455,5 @@ class SessaoConciliacaoViewSet(viewsets.ModelViewSet):
         return qs.order_by("-atualizado_em")
 
     def perform_create(self, serializer):
-        escritorio = Escritorio.objects.first()
+        escritorio = serializer.validated_data.get("escritorio") or Escritorio.objects.first()
         serializer.save(escritorio=escritorio)

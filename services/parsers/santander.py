@@ -1,13 +1,20 @@
 """
 Parser para extrato Santander Extrato Consolidado Inteligente PJ.
-Formato: Data | Descrição | Nº Documento | Créditos (R$) | Débitos (R$) | Saldo (R$)
+Utiliza pdfplumber e pandas para extrair e organizar os dados.
 """
 from __future__ import annotations
 
 import io
+import calendar
 import re
 from datetime import date
 from decimal import Decimal
+import pandas as pd
+
+try:
+    import pdfplumber
+except ImportError:
+    pdfplumber = None
 
 from .base import (
     ExtratoHeader,
@@ -22,31 +29,84 @@ class SantanderExtratoParser:
     """
     Extrato Consolidado Inteligente do Santander Empresas.
     O PDF tem colunas: Data | Descrição | Nº Documento | Créditos | Débitos | Saldo
-    pypdf tende a extrair a linha assim:
-      02/01 TARIFA MENSALIDADE PACOTE SERVICOS - 106,50- 0,00
-      02/01 TED RECEBIDA TRANSFERENCIA ENTRE CONTA - 2.300,00
-    Heurística: valor com "-" no final é débito; valor sem "-" é crédito.
     """
 
     _DATE_RE = re.compile(r"^(\d{2}/\d{2})\s+(.+)$")
     _VALUE_RE = re.compile(r"([\d.]+,\d{2})(-?)")
+    _SALDO_RE = re.compile(r"^SALDO\s*EM\s*(\d{2})/(\d{2})\s+([\d.]+,\d{2})(-?)$", re.IGNORECASE)
 
     def parse(self, uploaded_file) -> ExtratoResult:
+        if not pdfplumber:
+            return ExtratoResult(success=False, erros=["pdfplumber não está instalado."])
+
         try:
-            from pypdf import PdfReader
-        except ImportError:
-            return ExtratoResult(success=False, erros=["pypdf não instalado."])
-        try:
-            reader = PdfReader(io.BytesIO(_read_file_bytes(uploaded_file)))
+            raw = _read_file_bytes(uploaded_file)
+            pdf_file = io.BytesIO(raw)
         except Exception as exc:
             return ExtratoResult(success=False, erros=[f"Erro ao ler PDF: {exc}"])
 
-        pages = [p.extract_text() or "" for p in reader.pages]
+        try:
+            pages = []
+            with pdfplumber.open(pdf_file) as pdf:
+                for page in pdf.pages:
+                    text = page.extract_text(layout=False) or ""
+                    pages.append(text)
+        except Exception as exc:
+            return ExtratoResult(success=False, erros=[f"Erro no pdfplumber: {exc}"])
+
         full_text = "\n".join(pages)
         lines = [l.strip() for l in full_text.splitlines() if l.strip()]
 
         header = self._extract_header(full_text)
-        lancamentos = self._extract_lancamentos(lines, header.periodo_inicio)
+        
+        # Gera os dados brutos e joga no pandas
+        dados_brutos = self._extract_raw_data(lines, header.periodo_inicio)
+        
+        if not dados_brutos:
+            return ExtratoResult(
+                success=True,
+                header=header,
+                lancamentos=[],
+                total_lancamentos=0,
+            )
+
+        # Usando o Pandas para organizar e tipar os dados
+        df = pd.DataFrame(dados_brutos)
+        
+        # Limpeza e Padronização via Pandas
+        df['descricao'] = df['descricao'].fillna("").astype(str).str.strip()
+        df['documento'] = df['documento'].fillna("").astype(str).str.strip()
+        
+        # Filtra valores zerados comuns, mantendo linhas informativas de saldo.
+        df = df[
+            (df['valor_decimal'] != Decimal("0"))
+            | (df['natureza'].isin(["SALDO_ANTERIOR", "SALDO_FINAL"]))
+        ]
+
+        lancamentos = []
+        for _, row in df.iterrows():
+            lancamentos.append(LancamentoExtrato(
+                data=row['data_obj'],
+                descricao_original=row['descricao'],
+                valor=row['valor_decimal'],
+                natureza_inferida=row['natureza'],
+                documento=row['documento'],
+                saldo=row.get('saldo_decimal'),
+            ))
+
+        header.dados_brutos["saldo_anterior"] = str(
+            next((l.saldo if l.saldo is not None else l.valor for l in lancamentos if l.natureza_inferida == "SALDO_ANTERIOR"), Decimal("0"))
+        )
+        header.saldo = next(
+            (l.saldo if l.saldo is not None else l.valor for l in reversed(lancamentos) if l.natureza_inferida == "SALDO_FINAL"),
+            header.saldo,
+        )
+        header.dados_brutos["total_debito"] = str(
+            sum((l.valor for l in lancamentos if l.natureza_inferida == "DEBITO"), Decimal("0"))
+        )
+        header.dados_brutos["total_credito"] = str(
+            sum((l.valor for l in lancamentos if l.natureza_inferida == "CREDITO"), Decimal("0"))
+        )
 
         return ExtratoResult(
             success=True,
@@ -91,7 +151,7 @@ class SantanderExtratoParser:
         if m:
             h.empresa_cnpj = m.group(1).strip()
 
-        # Período pelo cabeçalho "Resumo - janeiro/2024"
+        # Período
         m = re.search(r"Resumo\s*[-–]\s*(\w+)/(\d{4})", text, re.IGNORECASE)
         if m:
             meses = {
@@ -99,44 +159,19 @@ class SantanderExtratoParser:
                 "maio": 5, "junho": 6, "julho": 7, "agosto": 8,
                 "setembro": 9, "outubro": 10, "novembro": 11, "dezembro": 12,
             }
-            mes_nome = m.group(1).lower()
-            ano = int(m.group(2))
-            mes = meses.get(mes_nome)
-            if mes:
-                import calendar
-                h.periodo_inicio = date(ano, mes, 1)
-                h.periodo_fim = date(ano, mes, calendar.monthrange(ano, mes)[1])
-
-        # Saldo em 31/xx
-        m = re.search(r"Saldo\s+de\s+Conta\s+Corrente\s+em\s+31/\d{2}\s+([\d.,]+)", text, re.IGNORECASE)
-        if m:
-            h.saldo = _parse_brl_decimal(m.group(1))
+            mes_str = m.group(1).lower()
+            ano_str = int(m.group(2))
+            if mes_str in meses:
+                month = meses[mes_str]
+                h.periodo_inicio = date(ano_str, month, 1)
+                h.periodo_fim = date(ano_str, month, calendar.monthrange(ano_str, month)[1])
 
         return h
 
-    def _extract_lancamentos(self, lines: list[str], ref_date: date | None) -> list[LancamentoExtrato]:
-        """
-        Máquina de estados para o Santander Extrato Consolidado Inteligente.
-
-        Problema: pypdf extrai cada célula visualmente separada como uma linha distinta.
-        Apenas a PRIMEIRA transação de cada data tem o prefixo "DD/MM"; as demais linhas do
-        mesmo dia aparecem sem data. Além disso, descrições longas podem vir em múltiplas
-        linhas antes da linha com o valor monetário.
-
-        Estratégia:
-          1. Rastrear current_date sempre que encontrarmos "DD/MM" no início de uma linha.
-          2. Acumular linhas de descrição (sem valor) em pending_desc.
-          3. Ao encontrar uma linha com valor monetário, construir o lançamento a partir de
-             pending_desc + a descrição presente na linha do valor.
-          4. Parar ao detectar início de outra seção do extrato (investimentos, débito
-             automático, etc.).
-        """
-        lancamentos = []
-        line_idx = 0
-
+    def _extract_raw_data(self, lines: list[str], ref_date: date | None) -> list[dict]:
+        dados = []
         year = ref_date.year if ref_date else date.today().year
 
-        # Marcadores de fim da seção Conta Corrente → para de processar
         _END_RE = re.compile(
             r"^(D[eé]bito\s+Autom[aá]tico\s+em\s+Conta"
             r"|Saldos\s+por\s+Per[íi]odo"
@@ -152,7 +187,6 @@ class SantanderExtratoParser:
             re.IGNORECASE,
         )
 
-        # Linhas que devem ser ignoradas mas NÃO encerram a seção
         _SKIP_RE = re.compile(
             r"^(SALDO\s+EM\b"
             r"|Pagina\s*:|Extrato_PJ|BALP_"
@@ -173,109 +207,105 @@ class SantanderExtratoParser:
         pending_desc: list[str] = []
 
         for line in lines:
-            # Fim da seção Conta Corrente → encerra
-            if _END_RE.match(line):
+            if _END_RE.match(line) and in_movimentacao:
                 break
 
-            # Linhas de ruído — pular
             if _SKIP_RE.match(line):
+                if "Créditos Débitos" in line or "Créditos Débitos".upper() in line.upper():
+                    in_movimentacao = True
                 continue
 
-            # Início explícito da seção de movimentação
-            if re.match(r"^Movimenta[çc][aã]o\s*$", line, re.IGNORECASE):
+            if ("Conta Corrente" in line or "Créditos Débitos" in line) and not in_movimentacao:
                 in_movimentacao = True
                 continue
 
             if not in_movimentacao:
-                if self._DATE_RE.match(line):
-                    in_movimentacao = True
-                else:
-                    continue
+                continue
 
-            # Detecta prefixo de data DD/MM e atualiza current_date
-            date_m = self._DATE_RE.match(line)
-            if date_m:
+            saldo_match = re.match(r"^SALDOEM(\d{2})/(\d{2})([\d.]+,\d{2})(-?)$", line.replace(" ", ""), re.IGNORECASE)
+            if saldo_match:
+                dia, mes, valor_str, sign = saldo_match.groups()
+                saldo = _parse_brl_decimal(valor_str)
+                if sign == "-":
+                    saldo = -saldo
+                year_for_saldo = year - 1 if int(mes) > (ref_date.month if ref_date else 12) else year
+                natureza = "SALDO_ANTERIOR" if int(mes) != (ref_date.month if ref_date else int(mes)) else "SALDO_FINAL"
+                dados.append({
+                    "data_obj": date(year_for_saldo, int(mes), int(dia)),
+                    "descricao": "SALDO ANTERIOR" if natureza == "SALDO_ANTERIOR" else "SALDO FINAL",
+                    "documento": "",
+                    "natureza": natureza,
+                    "valor_decimal": abs(saldo),
+                    "saldo_decimal": saldo,
+                })
+                continue
+
+            dt_match = self._DATE_RE.match(line)
+            if dt_match:
+                dt_str = dt_match.group(1)
+                rem_line = dt_match.group(2)
+
                 try:
-                    day, mon = map(int, date_m.group(1).split("/"))
-                    current_date = date(year, mon, day)
-                except Exception:
+                    d, m_ = dt_str.split("/")
+                    current_date = date(year, int(m_), int(d))
+                except ValueError:
                     pass
-                rest = date_m.group(2).strip()
+
+                self._parse_line_into_data(rem_line, current_date, dados, pending_desc)
+
             else:
-                rest = line
+                if self._parse_line_into_data(line, current_date, dados, pending_desc, is_continuation=True):
+                    pass
+                else:
+                    pending_desc.append(line)
 
-            if not rest:
-                continue
+        return dados
 
-            # Verifica se há valores monetários na linha
-            values_raw = self._VALUE_RE.findall(rest)
+    def _parse_line_into_data(self, text: str, current_date: date | None, dados: list[dict], pending_desc: list[str], is_continuation: bool = False) -> bool:
+        matches = list(self._VALUE_RE.finditer(text))
+        if not matches:
+            return False
 
-            if not values_raw:
-                # Linha de descrição pura — acumula no bloco pendente
-                pending_desc.append(rest)
-                continue
+        if len(matches) == 2:
+            m_val = matches[0]
+        else:
+            m_val = matches[-1]
 
-            # ── Linha com valor ──────────────────────────────────────────
-            # Extrai a parte descritiva (sem os valores monetários)
-            desc_part = self._VALUE_RE.sub("", rest).strip()
-            desc_part = re.sub(r"\s{2,}", " ", desc_part).strip()
-            # Remove o "-" isolado no final (coluna Nº Documento sem número)
-            desc_part = re.sub(r"\s+-\s*$", "", desc_part).strip()
+        val_str = m_val.group(1)
+        sign = m_val.group(2)
+        natureza = "DEBITO" if sign == "-" else "CREDITO"
+        saldo_dec: Decimal | None = None
+        if len(matches) >= 2:
+            saldo_match = matches[-1]
+            if saldo_match is not m_val:
+                saldo_dec = _parse_brl_decimal(saldo_match.group(1))
+                if saldo_match.group(2) == "-":
+                    saldo_dec = -saldo_dec
 
-            # Extrai número de documento do final da descrição
-            # Exclui anos (19xx/20xx) que podem aparecer como parte da descrição
-            documento = ""
-            doc_m = re.search(r"\b(\d{4,})\s*$", desc_part)
-            if doc_m and not re.match(r"^(19|20)\d{2}$", doc_m.group(1)):
-                documento = doc_m.group(1)
-                desc_part = desc_part[:doc_m.start()].strip()
-            # Remove pontuação solta no final (ex: "/" de "DEZEMBRO / 2023" após retirar o ano)
-            desc_part = re.sub(r"[\s/]+$", "", desc_part).strip()
+        prefix = text[: m_val.start()].strip()
+        if not prefix and is_continuation:
+            return False
 
-            # Combina linhas pendentes + descrição desta linha
-            full_desc = " ".join(p for p in [*pending_desc, desc_part] if p).strip()
-            pending_desc.clear()
+        doc_match = re.search(r"(\d{5,})$", prefix)
+        documento = ""
+        if doc_match:
+            documento = doc_match.group(1)
+            prefix = prefix[: doc_match.start()].strip()
 
-            if not full_desc:
-                continue
+        desc_parts = pending_desc + [prefix]
+        descricao_final = " ".join([p for p in desc_parts if p])
+        pending_desc.clear()
 
-            if current_date is None:
-                continue
-
-            # Filtra valores zero (saldo 0,00 das contas ContaMax)
-            non_zero = [(v, s) for v, s in values_raw if _parse_brl_decimal(v) != Decimal("0")]
-            if not non_zero:
-                continue
-
-            # Débito: valor com sufixo "-"; Crédito: sem sufixo
-            debito_vals = [(v, s) for v, s in non_zero if s == "-"]
-            credito_vals = [(v, s) for v, s in non_zero if s == ""]
-
-            # Usa o PRIMEIRO valor de cada natureza (valores seguintes são saldo corrente)
-            if debito_vals:
-                valor = _parse_brl_decimal(debito_vals[0][0])
-                natureza = "DEBITO"
-            elif credito_vals:
-                valor = _parse_brl_decimal(credito_vals[0][0])
-                natureza = "CREDITO"
-            else:
-                continue
-
-            if valor <= 0:
-                continue
-
-            line_idx += 1
-            lancamentos.append(LancamentoExtrato(
-                linha_origem=line_idx,
-                pagina=1,
-                data=current_date,
-                descricao_original=full_desc,
-                documento=documento,
-                valor=valor,
-                natureza_inferida=natureza,
-                saldo=None,
-                linha_original=line,
-            ))
-
-        lancamentos.sort(key=lambda x: (x.data or date.max, x.linha_origem))
-        return lancamentos
+        valor_dec = _parse_brl_decimal(val_str)
+        
+        dados.append({
+            "data_obj": current_date,
+            "descricao": descricao_final,
+            "documento": documento,
+            "natureza": natureza,
+            "valor_decimal": valor_dec,
+            "valor_str": val_str,
+            "saldo_decimal": saldo_dec,
+        })
+        
+        return True

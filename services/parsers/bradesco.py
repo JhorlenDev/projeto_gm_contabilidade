@@ -1,6 +1,7 @@
 """
 Parser para extrato Bradesco Net Empresa (PDF).
 Formato de colunas: Data | Lançamento | Dcto. | Crédito (R$) | Débito (R$) | Saldo (R$)
+Utiliza PyPDF para extrair o texto (devido a incompatibilidade do pdfplumber com alguns PDFs do Bradesco) e Pandas para organizar os dados.
 """
 from __future__ import annotations
 
@@ -8,6 +9,7 @@ import io
 import re
 from datetime import date
 from decimal import Decimal
+import pandas as pd
 
 from .base import (
     ExtratoHeader,
@@ -22,26 +24,11 @@ from .base import (
 class BradescoExtratoParser:
     """
     Parser especializado para extrato Bradesco Net Empresa (PDF).
-    Formato de colunas: Data | Lançamento | Dcto. | Crédito (R$) | Débito (R$) | Saldo (R$)
-    A natureza é determinada por qual coluna (Crédito ou Débito) contém o valor.
     """
 
     BANCOS_SUPORTADOS = ["bradesco"]
-
-    # Linha de cabeçalho do extrato — usado para detectar o início dos lançamentos
-    _HEADER_RE = re.compile(r"Data\s+Lan[çc]amento\s+Dcto", re.IGNORECASE)
-
-    # Linha com data no início: DD/MM/YYYY
     _DATE_RE = re.compile(r"^(\d{2}/\d{2}/\d{4})\s+(.+)$")
-
-    # Valor BRL: números com pontos/vírgulas ex: 1.234,56 ou 25.151,62
     _VALUE_RE = re.compile(r"(\d{1,3}(?:\.\d{3})*,\d{2})")
-
-    def __init__(self):
-        self._text: str = ""
-        self._pages: list[str] = []
-        self._warnings: list[str] = []
-        self._errors: list[str] = []
 
     def parse(self, uploaded_file) -> ExtratoResult:
         try:
@@ -49,7 +36,7 @@ class BradescoExtratoParser:
         except ImportError:
             return ExtratoResult(
                 success=False,
-                erros=["Biblioteca pypdf não instalada. Execute: pip install pypdf"]
+                erros=["Biblioteca pypdf não instalada."]
             )
 
         try:
@@ -62,39 +49,80 @@ class BradescoExtratoParser:
             page_text = page.extract_text() or ""
             self._pages.append(page_text)
 
-        self._text = "\n".join(self._pages)
+        full_text = "\n".join(self._pages)
 
-        if not self._text.strip():
+        if not full_text.strip():
             return ExtratoResult(success=False, erros=["Nenhum texto encontrado no PDF."])
 
-        header = self._extract_header()
-        lancamentos = self._extract_lancamentos()
+        header = self._extract_header(full_text)
+        dados_brutos = self._extract_raw_data(full_text)
+        
+        if not dados_brutos:
+            return ExtratoResult(
+                success=True,
+                header=header,
+                lancamentos=[],
+                total_lancamentos=0,
+            )
+
+        # Usando o Pandas para organizar e higienizar
+        df = pd.DataFrame(dados_brutos)
+        
+        # Higienização
+        df['descricao'] = df['descricao'].fillna("").astype(str).str.strip()
+        df['documento'] = df['documento'].fillna("").astype(str).str.strip()
+        df['natureza'] = df['natureza'].fillna("").astype(str).str.strip()
+        
+        # Remove transações zeradas comuns, mantendo linhas informativas de saldo.
+        df = df[
+            (df['valor_decimal'] > Decimal("0"))
+            | (df['natureza'].isin(["SALDO_ANTERIOR", "SALDO_FINAL"]))
+        ]
+
+        lancamentos = []
+        for _, row in df.iterrows():
+            lancamentos.append(LancamentoExtrato(
+                data=row['data_obj'],
+                descricao_original=row['descricao'],
+                valor=row['valor_decimal'],
+                natureza_inferida=row['natureza'],
+                documento=row['documento'],
+                saldo=row.get('saldo_decimal'),
+            ))
+
+        header.dados_brutos["saldo_anterior"] = str(
+            next((l.saldo if l.saldo is not None else l.valor for l in lancamentos if l.natureza_inferida == "SALDO_ANTERIOR"), Decimal("0"))
+        )
+        header.saldo = next(
+            (l.saldo if l.saldo is not None else l.valor for l in reversed(lancamentos) if l.natureza_inferida == "SALDO_FINAL"),
+            header.saldo,
+        )
+        header.dados_brutos["total_debito"] = str(
+            sum((l.valor for l in lancamentos if l.natureza_inferida == "DEBITO"), Decimal("0"))
+        )
+        header.dados_brutos["total_credito"] = str(
+            sum((l.valor for l in lancamentos if l.natureza_inferida == "CREDITO"), Decimal("0"))
+        )
 
         return ExtratoResult(
             success=True,
             header=header,
             lancamentos=lancamentos,
             total_lancamentos=len(lancamentos),
-            avisos=self._warnings,
-            erros=self._errors,
         )
 
-    def _extract_header(self) -> ExtratoHeader:
+    def _extract_header(self, full_text: str) -> ExtratoHeader:
         header = ExtratoHeader()
-        full_text = self._text
-
-        # Empresa: linha com "| CNPJ:"
+        
         m = re.search(r"([A-Z][^\n|]+?)\s*\|\s*CNPJ[:\s]*([\d./-]+)", full_text)
         if m:
             header.empresa_nome = m.group(1).strip()
             header.empresa_cnpj = m.group(2).strip()
         else:
-            # Fallback: CNPJ isolado
             m2 = re.search(r"CNPJ[:\s]*([\d]{2}[\.\d]{11}[\/]?\d{4}[-]?\d{2})", full_text, re.IGNORECASE)
             if m2:
                 header.empresa_cnpj = m2.group(1)
 
-        # Agência e conta
         account_patterns = [
             r"AG[:\s]*(\d+)\s*\|\s*(?:CC|Conta)[:\s]*([\d.\-]+)",
             r"Ag[êe]ncia\s*[:|]?\s*(\d+)\s*(?:\||/|-)?\s*(?:Conta|CC)\s*[:|]?\s*([\d.\-]+)",
@@ -108,41 +136,72 @@ class BradescoExtratoParser:
                 header.conta = m.group(2).strip()
                 break
 
-        # Período
         m = re.search(r"Entre\s+(\d{2}/\d{2}/\d{4})\s+e\s+(\d{2}/\d{2}/\d{4})", full_text, re.IGNORECASE)
         if m:
             header.periodo_inicio = _parse_date_br(m.group(1))
             header.periodo_fim = _parse_date_br(m.group(2))
 
-        # Saldo disponível
-        m = re.search(r"Total\s+Dispon[íi]vel\s*\(R\$\)\s*([\d.,]+)", full_text, re.IGNORECASE)
-        if m:
-            header.saldo = _parse_brl_decimal(m.group(1))
-
         header.dados_brutos = {"banco": "bradesco", "paginas": len(self._pages)}
         return header
 
-    def _extract_lancamentos(self) -> list[LancamentoExtrato]:
-        """
-        Estratégia: percorre todas as linhas e agrupa blocos por data.
-        Cada bloco de data pode ter múltiplas linhas de lançamento.
-        """
-        lancamentos: list[LancamentoExtrato] = []
-        lines = [line.strip() for line in self._text.splitlines()]
+    def _extract_raw_data(self, full_text: str) -> list[dict]:
+        lines = [line.strip() for line in full_text.splitlines()]
 
         _SKIP_RE = re.compile(
             r"^(Folha|Extrato\s+Mensal|A\s+MESQUITA|Nome\s+do|Data\s+da|Data\s+Lan[çc]|Ag[êe]ncia\s*\|"
             r"|Agência\s*\|\s*Conta|Total\s+Dispon|Últimos\s+Lançamentos|SALDO\s+ANTERIOR|Os\s+dados\s+acima"
             r"|Não\s+há\s+lan|Saldos\s+Invest|^\s*$)", re.IGNORECASE
         )
-
         _SUMMARY_RE = re.compile(r"^Total\b", re.IGNORECASE)
 
-        blocks: list[tuple[str, list[str]]] = []
+        blocks: list[tuple[str, list[str], int]] = []
+        dados = []
         current_date: str | None = None
         current_block: list[str] = []
+        current_order = 0
 
-        for line in lines:
+        for line_number, line in enumerate(lines, start=1):
+            saldo_anterior_match = re.match(r"^(\d{2}/\d{2}/\d{4})\s+SALDO\s+ANTERIOR\s+(-?\d{1,3}(?:\.\d{3})*,\d{2})$", line, re.IGNORECASE)
+            if saldo_anterior_match:
+                if current_date and current_block:
+                    blocks.append((current_date, current_block, current_order))
+                    current_block = []
+                data_saldo = _parse_date_br(saldo_anterior_match.group(1))
+                saldo = _parse_brl_decimal(saldo_anterior_match.group(2))
+                if data_saldo:
+                    dados.append({
+                        "data_obj": data_saldo,
+                        "descricao": "SALDO ANTERIOR",
+                        "documento": "",
+                        "valor_decimal": abs(saldo),
+                        "saldo_decimal": saldo,
+                        "natureza": "SALDO_ANTERIOR",
+                        "ordem": line_number,
+                    })
+                current_date = None
+                continue
+
+            total_match = re.match(r"^Total\s+[-\d]", line, re.IGNORECASE)
+            if total_match:
+                if current_date and current_block:
+                    blocks.append((current_date, current_block, current_order))
+                    current_block = []
+                values = self._VALUE_RE.findall(line)
+                data_total = _parse_date_br(current_date) if current_date else None
+                if data_total and values:
+                    saldo = _parse_brl_decimal(values[-1])
+                    dados.append({
+                        "data_obj": data_total,
+                        "descricao": "SALDO FINAL",
+                        "documento": "",
+                        "valor_decimal": abs(saldo),
+                        "saldo_decimal": saldo,
+                        "natureza": "SALDO_FINAL",
+                        "ordem": line_number,
+                    })
+                current_date = None
+                continue
+
             if _SKIP_RE.search(line):
                 continue
 
@@ -152,42 +211,35 @@ class BradescoExtratoParser:
                 if _SUMMARY_RE.match(rest):
                     continue
                 if current_date and current_block:
-                    blocks.append((current_date, current_block))
+                    blocks.append((current_date, current_block, current_order))
                 current_date = m.group(1)
+                current_order = line_number
                 current_block = [rest] if rest else []
             elif current_date is not None:
                 current_block.append(line)
 
         if current_date and current_block:
-            blocks.append((current_date, current_block))
+            blocks.append((current_date, current_block, current_order))
 
         prev_saldo: Decimal | None = None
-        line_idx = 0
 
-        for date_str, block_lines in blocks:
+        for date_str, block_lines, block_order in blocks:
             data = _parse_date_br(date_str)
             if not data:
                 continue
 
-            sub_lancamentos = self._split_block_into_lancamentos(block_lines)
+            sub_lancamentos = self._split_block_into_dicts(block_lines)
 
             for sub in sub_lancamentos:
-                line_idx += 1
                 descricao = sub["descricao"]
                 documento = sub["documento"]
                 valor = sub["valor"]
                 saldo = sub["saldo"]
-
-                if valor <= 0:
-                    continue
-
                 natureza = sub.get("natureza", "")
+
                 if not natureza and saldo is not None and prev_saldo is not None:
                     diff = saldo - prev_saldo
-                    if diff > 0:
-                        natureza = "CREDITO"
-                    else:
-                        natureza = "DEBITO"
+                    natureza = "CREDITO" if diff > 0 else "DEBITO"
                 elif not natureza:
                     desc_upper = descricao.upper()
                     credito_kw = ("DEPOSITO", "DEP ", "RECEBI", "CREDITO", "CRÉDITO", "VENDA CART",
@@ -201,25 +253,21 @@ class BradescoExtratoParser:
 
                 if saldo is not None:
                     prev_saldo = saldo
+                    
+                dados.append({
+                    "data_obj": data,
+                    "descricao": descricao,
+                    "documento": documento,
+                    "valor_decimal": valor,
+                    "natureza": natureza,
+                    "saldo_decimal": saldo,
+                    "ordem": block_order,
+                })
 
-                lancamentos.append(LancamentoExtrato(
-                    linha_origem=line_idx,
-                    pagina=1,
-                    data=data,
-                    descricao_original=descricao,
-                    documento=documento,
-                    valor=valor,
-                    natureza_inferida=natureza,
-                    saldo=saldo,
-                    linha_original=" | ".join(block_lines[:3]),
-                ))
+        dados.sort(key=lambda row: row.get("ordem", 0))
+        return dados
 
-        return lancamentos
-
-    def _split_block_into_lancamentos(self, block_lines: list[str]) -> list[dict]:
-        """
-        Divide as linhas de um bloco (mesmo dia) em sub-lançamentos.
-        """
+    def _split_block_into_dicts(self, block_lines: list[str]) -> list[dict]:
         results = []
         pending_desc_lines: list[str] = []
 
@@ -231,7 +279,6 @@ class BradescoExtratoParser:
 
             desc_part = self._VALUE_RE.sub("", line).strip()
             desc_part = re.sub(r"\s{2,}", " ", desc_part).strip()
-            # Remove traço residual de valores negativos (ex: "-11.571,73" deixa "-" após remoção do número)
             desc_part = re.sub(r"\s*-\s*$", "", desc_part).strip()
 
             full_desc_lines = pending_desc_lines + ([desc_part] if desc_part else [])
@@ -262,17 +309,14 @@ class BradescoExtratoParser:
                 idx_in_line = line.rfind(penultimate_str)
                 if idx_in_line > 0 and line[idx_in_line - 1] == "-":
                     natureza = "DEBITO"
-                    valor = _parse_brl_decimal(penultimate_str)
 
-            results.append({
-                "descricao": full_desc,
-                "documento": documento,
-                "valor": abs(valor) if valor > 0 else Decimal("0"),
-                "saldo": saldo,
-                "natureza": natureza,
-            })
-
-        # Remove sub-lançamentos cujo descrição é linha de resumo/total (ex: "Total -")
-        results = [r for r in results if not re.match(r"^Total\b", r["descricao"], re.IGNORECASE)]
+            if not re.match(r"^Total\b", full_desc, re.IGNORECASE):
+                results.append({
+                    "descricao": full_desc,
+                    "documento": documento,
+                    "valor": abs(valor),
+                    "saldo": saldo,
+                    "natureza": natureza,
+                })
 
         return results

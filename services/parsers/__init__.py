@@ -7,6 +7,7 @@ Estrutura:
   amazonia.py  — AmazoniaExtratoParser  (Banco da Amazônia / BASA)
   bb.py        — BancoBrasilExtratoParser
   santander.py — SantanderExtratoParser
+  caixa.py     — CaixaExtratoParser
 
 Uso:
   from services.parsers import process_extrato_pdf
@@ -29,6 +30,7 @@ from .bradesco import BradescoExtratoParser
 from .amazonia import AmazoniaExtratoParser
 from .bb import BancoBrasilExtratoParser
 from .santander import SantanderExtratoParser
+from .caixa import CaixaExtratoParser
 
 __all__ = [
     "ExtratoHeader",
@@ -39,6 +41,7 @@ __all__ = [
     "AmazoniaExtratoParser",
     "BancoBrasilExtratoParser",
     "SantanderExtratoParser",
+    "CaixaExtratoParser",
     "process_extrato_pdf",
     "_parse_brl_decimal",
     "_parse_date_br",
@@ -81,6 +84,8 @@ def process_extrato_pdf(uploaded_file, banco: str = "auto") -> ExtratoResult:
                 banco = "santander"
             elif "banco do brasil" in fp_lower or "bb rende" in fp_lower or "bb seguro" in fp_lower or "consultas - extrato de conta corrente" in fp_lower:
                 banco = "bb"
+            elif "caixa" in fp_lower or "gerenciador caixa" in fp_lower:
+                banco = "caixa"
             else:
                 banco = "generic"
         except Exception:
@@ -107,5 +112,7 @@ def process_extrato_pdf(uploaded_file, banco: str = "auto") -> ExtratoResult:
         return BancoBrasilExtratoParser().parse(wrapped)
     if banco == "santander":
         return SantanderExtratoParser().parse(wrapped)
+    if banco == "caixa":
+        return CaixaExtratoParser().parse(wrapped)
 
     return PDFExtratoParser().parse(wrapped)
